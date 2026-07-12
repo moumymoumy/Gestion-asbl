@@ -1,0 +1,2231 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover">
+<title>Gestion ASBL — Tableau de bord</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#F6F7F5;
+    --surface:#FFFFFF;
+    --surface-2:#EFF2EF;
+    --ink:#182024;
+    --ink-soft:#5B6A6D;
+    --primary:#0F5257;
+    --primary-dark:#0B3A3E;
+    --primary-soft:#E4EEEE;
+    --accent:#E3A008;
+    --accent-soft:#FCF0D3;
+    --success:#2F9E44;
+    --success-soft:#E6F6EA;
+    --danger:#E03131;
+    --danger-soft:#FCE9E9;
+    --border:#E2E6E4;
+  }
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Inter',system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    overscroll-behavior:none;
+  }
+  h1,h2,h3,h4,.font-display{font-family:'Sora',system-ui,sans-serif;}
+  .font-mono-num{font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums;}
+  ::-webkit-scrollbar{width:8px;height:8px;}
+  ::-webkit-scrollbar-thumb{background:#D3D9D6;border-radius:8px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+
+  .app-shell{display:flex; height:100vh; overflow:hidden;}
+
+  /* Sidebar (desktop) */
+  .sidebar{
+    width:260px; flex-shrink:0; background:var(--surface);
+    border-right:1px solid var(--border);
+    display:flex; flex-direction:column;
+    padding:20px 14px;
+  }
+  .brand{display:flex; align-items:center; gap:10px; padding:6px 8px 22px 8px;}
+  .brand-mark{
+    width:36px;height:36px;border-radius:10px;
+    background:linear-gradient(135deg, var(--primary), var(--primary-dark));
+    display:flex;align-items:center;justify-content:center; color:white; flex-shrink:0;
+  }
+  .nav-item{
+    display:flex; align-items:center; gap:12px;
+    padding:11px 14px; border-radius:12px; color:var(--ink-soft);
+    font-weight:600; font-size:14.5px; cursor:pointer; user-select:none;
+    transition:background .15s ease, color .15s ease, transform .1s ease;
+    margin-bottom:4px;
+  }
+  .nav-item:hover{background:var(--surface-2); color:var(--ink);}
+  .nav-item.active{background:var(--primary-soft); color:var(--primary-dark);}
+  .nav-item:active{transform:scale(0.98);}
+  .nav-item svg{width:19px;height:19px; flex-shrink:0;}
+
+  .file-status-box{
+    margin-top:auto; padding:12px; border-radius:14px; background:var(--surface-2);
+    font-size:12.5px; color:var(--ink-soft); line-height:1.5;
+  }
+  .file-status-dot{width:8px;height:8px;border-radius:50%; display:inline-block; margin-right:6px;}
+
+  /* Main content */
+  .main-area{flex:1; overflow-y:auto; padding:28px 34px 100px 34px;}
+  .view-section{display:none; animation:fadeUp .28s ease;}
+  .view-section.active{display:block;}
+  @keyframes fadeUp{from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:translateY(0);}}
+
+  .card{background:var(--surface); border:1px solid var(--border); border-radius:16px; box-shadow:0 1px 2px rgba(20,30,30,0.03);}
+  .btn-primary{
+    background:var(--primary); color:white; font-weight:600; font-size:14px;
+    padding:10px 18px; border-radius:11px; display:inline-flex; align-items:center; gap:8px;
+    transition:background .15s ease, transform .1s ease; border:none; cursor:pointer;
+  }
+  .btn-primary:hover{background:var(--primary-dark);}
+  .btn-primary:active{transform:scale(0.97);}
+  .btn-secondary{
+    background:var(--surface); color:var(--ink); font-weight:600; font-size:14px;
+    padding:10px 18px; border-radius:11px; display:inline-flex; align-items:center; gap:8px;
+    transition:background .15s ease, transform .1s ease; border:1px solid var(--border); cursor:pointer;
+  }
+  .btn-secondary:hover{background:var(--surface-2);}
+  .btn-secondary:active{transform:scale(0.97);}
+  .btn-danger-ghost{
+    color:var(--danger); background:transparent; border:none; cursor:pointer;
+    padding:6px; border-radius:8px; transition:background .15s ease;
+  }
+  .btn-danger-ghost:hover{background:var(--danger-soft);}
+
+  .btn-edit-ghost{
+    color:var(--ink-soft); background:transparent; border:none; cursor:pointer;
+    padding:6px; border-radius:8px; transition:background .15s ease, color .15s ease;
+  }
+  .btn-edit-ghost:hover{background:var(--primary-soft); color:var(--primary-dark);}
+
+  .input-field{
+    width:100%; padding:10px 12px; border-radius:10px; border:1px solid var(--border);
+    background:var(--surface); font-size:14px; color:var(--ink); font-family:'Inter',sans-serif;
+    transition:border-color .15s ease, box-shadow .15s ease;
+  }
+  .input-field:focus{outline:none; border-color:var(--primary); box-shadow:0 0 0 3px var(--primary-soft);}
+  .field-label{font-size:12.5px; font-weight:600; color:var(--ink-soft); margin-bottom:6px; display:block;}
+
+  .badge{font-size:11.5px; font-weight:700; padding:3px 9px; border-radius:999px; letter-spacing:.02em;}
+  .kpi-value{font-size:28px; font-weight:700; letter-spacing:-0.01em;}
+
+  .progress-track{width:100%; height:9px; background:var(--surface-2); border-radius:999px; overflow:hidden;}
+  .progress-fill{height:100%; border-radius:999px; transition:width .5s cubic-bezier(.4,0,.2,1); background:linear-gradient(90deg, var(--primary), var(--primary-dark));}
+
+  input[type=range].slider{
+    -webkit-appearance:none; width:100%; height:6px; border-radius:999px; background:var(--surface-2); outline:none;
+  }
+  input[type=range].slider::-webkit-slider-thumb{
+    -webkit-appearance:none; width:20px; height:20px; border-radius:50%; background:var(--primary);
+    border:3px solid white; box-shadow:0 1px 4px rgba(0,0,0,0.25); cursor:pointer; margin-top:0px;
+  }
+  input[type=range].slider::-moz-range-thumb{
+    width:20px; height:20px; border-radius:50%; background:var(--primary); border:3px solid white;
+    box-shadow:0 1px 4px rgba(0,0,0,0.25); cursor:pointer;
+  }
+
+  table.data-table{width:100%; border-collapse:collapse; font-size:13.5px;}
+  table.data-table thead th{
+    text-align:left; font-size:11.5px; text-transform:uppercase; letter-spacing:.04em;
+    color:var(--ink-soft); font-weight:700; padding:0 12px 10px 12px; border-bottom:1px solid var(--border);
+  }
+  table.data-table tbody td{padding:12px; border-bottom:1px solid var(--border); vertical-align:middle;}
+  table.data-table tbody tr:last-child td{border-bottom:none;}
+  table.data-table tbody tr{transition:background .12s ease;}
+  table.data-table tbody tr:hover{background:var(--surface-2);}
+
+  .toast{
+    position:fixed; bottom:20px; left:50%; transform:translateX(-50%) translateY(20px);
+    background:var(--ink); color:white; padding:11px 20px; border-radius:12px; font-size:13.5px; font-weight:600;
+    opacity:0; pointer-events:none; transition:all .25s cubic-bezier(.4,0,.2,1); z-index:200; box-shadow:0 8px 24px rgba(0,0,0,0.2);
+    display:flex; align-items:center; gap:8px;
+  }
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(0); pointer-events:auto;}
+
+  /* Bottom nav (mobile) */
+  .bottom-nav{
+    display:none; position:fixed; bottom:0; left:0; right:0; background:var(--surface);
+    border-top:1px solid var(--border); padding:8px 4px calc(env(safe-area-inset-bottom,0px) + 6px) 4px;
+    z-index:100; box-shadow:0 -2px 12px rgba(0,0,0,0.05);
+  }
+  .bottom-nav-inner{display:flex; justify-content:space-around;}
+  .bottom-nav-item{
+    display:flex; flex-direction:column; align-items:center; gap:3px; color:var(--ink-soft);
+    font-size:10.5px; font-weight:600; padding:5px 8px; border-radius:12px; transition:color .15s ease;
+  }
+  .bottom-nav-item svg{width:21px;height:21px;}
+  .bottom-nav-item.active{color:var(--primary);}
+
+  .modal-backdrop{
+    position:fixed; inset:0; background:rgba(15,25,26,0.45); z-index:150; display:none;
+    align-items:center; justify-content:center; padding:20px; backdrop-filter:blur(2px);
+  }
+  .modal-backdrop.show{display:flex;}
+  .modal-box{background:var(--surface); border-radius:18px; padding:24px; width:100%; max-width:440px; max-height:88vh; overflow-y:auto; animation:fadeUp .2s ease;}
+
+  @media (max-width:860px){
+    .sidebar{display:none;}
+    .main-area{padding:18px 16px 92px 16px;}
+    .bottom-nav{display:block;}
+  }
+</style>
+</head>
+<body>
+<div id="app" class="app-shell">
+
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 L12 22 M2 7 L22 7 M2 7 L4.5 14 L7 7 M17 7 L19.5 14 L22 7"/></svg>
+      </div>
+      <div>
+        <div class="font-display" style="font-size:15px; font-weight:700; line-height:1.15;" id="sidebar-project-name">Mon ASBL</div>
+        <div style="font-size:11.5px; color:var(--ink-soft);">Gestion de projet</div>
+      </div>
+    </div>
+
+    <nav id="sidebar-nav">
+      <div class="nav-item active" data-view="accueil">
+        <i data-lucide="layout-dashboard"></i><span>Accueil</span>
+      </div>
+      <div class="nav-item" data-view="config">
+        <i data-lucide="users"></i><span>Configuration &amp; Équipe</span>
+      </div>
+      <div class="nav-item" data-view="taches">
+        <i data-lucide="list-checks"></i><span>Tâches</span>
+      </div>
+      <div class="nav-item" data-view="budget">
+        <i data-lucide="wallet"></i><span>Budget &amp; Simulateur</span>
+      </div>
+      <div class="nav-item" data-view="fichier">
+        <i data-lucide="folder-cog"></i><span>Fichier projet</span>
+      </div>
+    </nav>
+
+    <div class="file-status-box" id="file-status-box">
+      <span class="file-status-dot" style="background:var(--danger);"></span><span id="file-status-text">Aucun fichier connecté</span>
+      <div id="file-status-sub" style="margin-top:4px; color:#8b9a9c;"></div>
+    </div>
+  </aside>
+
+  <main class="main-area" id="main-area">
+
+    <section class="view-section active" id="view-accueil"></section>
+    <section class="view-section" id="view-config"></section>
+    <section class="view-section" id="view-taches"></section>
+    <section class="view-section" id="view-budget"></section>
+    <section class="view-section" id="view-fichier"></section>
+
+  </main>
+
+  <nav class="bottom-nav">
+    <div class="bottom-nav-inner">
+      <div class="bottom-nav-item active" data-view="accueil">
+        <i data-lucide="layout-dashboard"></i><span>Accueil</span>
+      </div>
+      <div class="bottom-nav-item" data-view="config">
+        <i data-lucide="users"></i><span>Équipe</span>
+      </div>
+      <div class="bottom-nav-item" data-view="taches">
+        <i data-lucide="list-checks"></i><span>Tâches</span>
+      </div>
+      <div class="bottom-nav-item" data-view="budget">
+        <i data-lucide="wallet"></i><span>Budget</span>
+      </div>
+      <div class="bottom-nav-item" data-view="fichier">
+        <i data-lucide="folder-cog"></i><span>Fichier</span>
+      </div>
+    </div>
+  </nav>
+
+</div>
+
+<div id="toast" class="toast"></div>
+<div id="modal-root"></div>
+
+<script>
+/* =========================================================================
+   1. ÉTAT GLOBAL DE L'APPLICATION
+   ========================================================================= */
+const STORAGE_DB_NAME = 'asbl-gestion-db';
+const STORAGE_DB_VERSION = 2;
+const STORAGE_STORE_NAME = 'handles';
+const STORAGE_HANDLE_KEY = 'projectFileHandle';
+const PROJECTS_STORE_NAME = 'savedProjects';
+const LOCAL_CACHE_KEY = 'asbl_gestion_local_cache_v1';
+
+function creerEtatVide(){
+  return {
+    project: {
+      name: 'Mon projet ASBL',
+      description: '',
+      objectives: '',
+      startDate: '',
+      endDate: '',
+      status: 'planification'
+    },
+    team: [],
+    tasks: [],
+    expenses: [],
+    executionSessions: [],
+    labor: [],
+    simulator: {
+      participants: 50,
+      ticketPrice: 20
+    },
+    meta: {
+      createdAt: new Date().toISOString(),
+      lastModified: new Date().toISOString()
+    }
+  };
+}
+
+let state = creerEtatVide();
+let fileHandle = null;
+let isMobileFileMode = false;
+let autosaveTimer = null;
+let currentView = 'accueil';
+let profitChartInstance = null;
+let editingTaskId = null;
+let editingMemberId = null;
+let editingExpenseId = null;
+let editingSessionId = null;
+let editingLaborId = null;
+
+function genererId(){
+  return 'id_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 9);
+}
+
+/* =========================================================================
+   2. UTILITAIRES D'AFFICHAGE
+   ========================================================================= */
+function formaterMontant(valeur){
+  const nombre = Number(valeur) || 0;
+  return nombre.toLocaleString('fr-BE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+}
+
+function formaterDate(dateStr){
+  if(!dateStr) return '—';
+  const d = new Date(dateStr);
+  if(isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('fr-BE', { day:'2-digit', month:'short', year:'numeric' });
+}
+
+function formaterHeure(date){
+  return date.toLocaleTimeString('fr-BE', { hour:'2-digit', minute:'2-digit' });
+}
+
+function echapperHtml(str){
+  const div = document.createElement('div');
+  div.textContent = str == null ? '' : String(str);
+  return div.innerHTML;
+}
+
+function afficherToast(message, type){
+  const toastEl = document.getElementById('toast');
+  const icone = type === 'erreur' ? 'alert-circle' : (type === 'succes' ? 'check-circle-2' : 'info');
+  toastEl.innerHTML = '<i data-lucide="' + icone + '" style="width:16px;height:16px;"></i><span>' + echapperHtml(message) + '</span>';
+  lucide.createIcons();
+  toastEl.classList.add('show');
+  clearTimeout(afficherToast._timer);
+  afficherToast._timer = setTimeout(() => { toastEl.classList.remove('show'); }, 2600);
+}
+
+function rafraichirIcones(){
+  lucide.createIcons();
+}
+
+/* =========================================================================
+   3. DÉTECTION DE PLATEFORME ET SUPPORT DE L'API FILE SYSTEM ACCESS
+   ========================================================================= */
+function supportFileSystemAccess(){
+  return typeof window.showSaveFilePicker === 'function' && typeof window.showOpenFilePicker === 'function';
+}
+
+/* =========================================================================
+   4. INDEXEDDB — MÉMORISATION DU HANDLE DE FICHIER ENTRE LES SESSIONS
+   ========================================================================= */
+function ouvrirBaseHandles(){
+  return new Promise((resolve, reject) => {
+    const requete = indexedDB.open(STORAGE_DB_NAME, STORAGE_DB_VERSION);
+    requete.onupgradeneeded = (evenement) => {
+      const db = evenement.target.result;
+      if(!db.objectStoreNames.contains(STORAGE_STORE_NAME)){
+        db.createObjectStore(STORAGE_STORE_NAME);
+      }
+      if(!db.objectStoreNames.contains(PROJECTS_STORE_NAME)){
+        db.createObjectStore(PROJECTS_STORE_NAME, { keyPath: 'id' });
+      }
+    };
+    requete.onsuccess = () => resolve(requete.result);
+    requete.onerror = () => reject(requete.error);
+  });
+}
+
+async function enregistrerHandleEnBase(handle){
+  try{
+    const db = await ouvrirBaseHandles();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORAGE_STORE_NAME, 'readwrite');
+      tx.objectStore(STORAGE_STORE_NAME).put(handle, STORAGE_HANDLE_KEY);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  }catch(erreur){
+    console.warn('Impossible de mémoriser le handle de fichier :', erreur);
+  }
+}
+
+async function chargerHandleDepuisBase(){
+  try{
+    const db = await ouvrirBaseHandles();
+    const handle = await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORAGE_STORE_NAME, 'readonly');
+      const requete = tx.objectStore(STORAGE_STORE_NAME).get(STORAGE_HANDLE_KEY);
+      requete.onsuccess = () => resolve(requete.result || null);
+      requete.onerror = () => reject(requete.error);
+    });
+    db.close();
+    return handle;
+  }catch(erreur){
+    console.warn('Impossible de récupérer le handle de fichier :', erreur);
+    return null;
+  }
+}
+
+async function effacerHandleEnBase(){
+  try{
+    const db = await ouvrirBaseHandles();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(STORAGE_STORE_NAME, 'readwrite');
+      tx.objectStore(STORAGE_STORE_NAME).delete(STORAGE_HANDLE_KEY);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  }catch(erreur){
+    console.warn('Impossible de supprimer le handle de fichier :', erreur);
+  }
+}
+
+/* =========================================================================
+   4bis. INDEXEDDB — LISTE DES PROJETS ENREGISTRÉS (accès rapide en un clic)
+   ========================================================================= */
+function formaterDateCourte(dateStr){
+  if(!dateStr) return '';
+  const d = new Date(dateStr);
+  if(isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('fr-BE', { day: 'numeric', month: 'long' });
+}
+
+function calculerLibelleProjetCourant(){
+  const nom = state.project.name || 'Projet sans nom';
+  let dateLabel = '';
+  if(state.executionSessions && state.executionSessions.length > 0){
+    const premiere = state.executionSessions.slice().sort((a, b) => (a.date || '').localeCompare(b.date || ''))[0];
+    dateLabel = formaterDateCourte(premiere.date);
+  }
+  return { nom, dateLabel };
+}
+
+async function listerProjetsEnregistres(){
+  try{
+    const db = await ouvrirBaseHandles();
+    const liste = await new Promise((resolve, reject) => {
+      const tx = db.transaction(PROJECTS_STORE_NAME, 'readonly');
+      const requete = tx.objectStore(PROJECTS_STORE_NAME).getAll();
+      requete.onsuccess = () => resolve(requete.result || []);
+      requete.onerror = () => reject(requete.error);
+    });
+    db.close();
+    return liste.sort((a, b) => (b.lastSaved || '').localeCompare(a.lastSaved || ''));
+  }catch(erreur){
+    console.warn('Impossible de lister les projets enregistrés :', erreur);
+    return [];
+  }
+}
+
+async function ajouterOuMettreAJourProjetDansListe(handle){
+  try{
+    const { nom, dateLabel } = calculerLibelleProjetCourant();
+    const db = await ouvrirBaseHandles();
+    const entrees = await new Promise((resolve, reject) => {
+      const tx = db.transaction(PROJECTS_STORE_NAME, 'readonly');
+      const requete = tx.objectStore(PROJECTS_STORE_NAME).getAll();
+      requete.onsuccess = () => resolve(requete.result || []);
+      requete.onerror = () => reject(requete.error);
+    });
+
+    let entreeExistante = null;
+    for(const entree of entrees){
+      try{
+        if(entree.handle && typeof entree.handle.isSameEntry === 'function' && await entree.handle.isSameEntry(handle)){
+          entreeExistante = entree;
+          break;
+        }
+      }catch(e){ /* handle invalide, on ignore */ }
+    }
+
+    const enregistrement = {
+      id: entreeExistante ? entreeExistante.id : genererId(),
+      name: nom,
+      dateLabel: dateLabel,
+      handle: handle,
+      lastSaved: new Date().toISOString()
+    };
+
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(PROJECTS_STORE_NAME, 'readwrite');
+      tx.objectStore(PROJECTS_STORE_NAME).put(enregistrement);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  }catch(erreur){
+    console.warn('Impossible de mettre à jour la liste des projets enregistrés :', erreur);
+  }
+}
+
+async function supprimerProjetDeListe(id){
+  try{
+    const db = await ouvrirBaseHandles();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(PROJECTS_STORE_NAME, 'readwrite');
+      tx.objectStore(PROJECTS_STORE_NAME).delete(id);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  }catch(erreur){
+    console.warn('Impossible de retirer ce projet de la liste :', erreur);
+  }
+}
+
+/* =========================================================================
+   5. FILE SYSTEM ACCESS API — CRÉATION / OUVERTURE / ÉCRITURE PHYSIQUE
+   ========================================================================= */
+async function creerNouveauFichierProjet(){
+  if(!supportFileSystemAccess()){
+    afficherToast("Ton navigateur ne supporte pas la création de fichier physique.", 'erreur');
+    return;
+  }
+  try{
+    const handle = await window.showSaveFilePicker({
+      suggestedName: 'projet-asbl.json',
+      types: [{ description: 'Fichier de projet ASBL', accept: { 'application/json': ['.json'] } }]
+    });
+    fileHandle = handle;
+    state = creerEtatVide();
+    await ecrireEtatDansFichier();
+    await enregistrerHandleEnBase(handle);
+    await ajouterOuMettreAJourProjetDansListe(handle);
+    mettreAJourStatutFichier();
+    afficherToast('Nouveau fichier de projet créé.', 'succes');
+    naviguerVers('accueil');
+    rendreTout();
+  }catch(erreur){
+    if(erreur && erreur.name !== 'AbortError'){
+      console.error(erreur);
+      afficherToast("La création du fichier a échoué.", 'erreur');
+    }
+  }
+}
+
+async function ouvrirFichierProjetExistant(){
+  if(!supportFileSystemAccess()){
+    afficherToast("Ton navigateur ne supporte pas l'ouverture de fichier physique.", 'erreur');
+    return;
+  }
+  try{
+    const [handle] = await window.showOpenFilePicker({
+      types: [{ description: 'Fichier de projet ASBL', accept: { 'application/json': ['.json'] } }],
+      multiple: false
+    });
+    fileHandle = handle;
+    const fichier = await handle.getFile();
+    const texte = await fichier.text();
+    const donnees = JSON.parse(texte);
+    state = fusionnerAvecEtatVide(donnees);
+    await enregistrerHandleEnBase(handle);
+    await ajouterOuMettreAJourProjetDansListe(handle);
+    mettreAJourStatutFichier();
+    afficherToast('Fichier de projet chargé.', 'succes');
+    naviguerVers('accueil');
+    rendreTout();
+  }catch(erreur){
+    if(erreur && erreur.name !== 'AbortError'){
+      console.error(erreur);
+      afficherToast("L'ouverture du fichier a échoué ou le fichier est invalide.", 'erreur');
+    }
+  }
+}
+
+function fusionnerAvecEtatVide(donnees){
+  const base = creerEtatVide();
+  return {
+    project: Object.assign({}, base.project, donnees.project || {}),
+    team: Array.isArray(donnees.team) ? donnees.team : [],
+    tasks: Array.isArray(donnees.tasks) ? donnees.tasks : [],
+    expenses: Array.isArray(donnees.expenses) ? donnees.expenses : [],
+    executionSessions: Array.isArray(donnees.executionSessions) ? donnees.executionSessions : [],
+    labor: Array.isArray(donnees.labor) ? donnees.labor : [],
+    simulator: Object.assign({}, base.simulator, donnees.simulator || {}),
+    meta: Object.assign({}, base.meta, donnees.meta || {})
+  };
+}
+
+async function verifierEtRestaurerPermission(handle){
+  try{
+    const options = { mode: 'readwrite' };
+    const permissionActuelle = await handle.queryPermission(options);
+    if(permissionActuelle === 'granted') return true;
+    return false;
+  }catch(erreur){
+    return false;
+  }
+}
+
+async function demanderPermission(handle){
+  try{
+    const options = { mode: 'readwrite' };
+    const resultat = await handle.requestPermission(options);
+    return resultat === 'granted';
+  }catch(erreur){
+    return false;
+  }
+}
+
+async function ecrireEtatDansFichier(){
+  if(!fileHandle) return false;
+  try{
+    state.meta.lastModified = new Date().toISOString();
+    const writable = await fileHandle.createWritable();
+    await writable.write(JSON.stringify(state, null, 2));
+    await writable.close();
+    return true;
+  }catch(erreur){
+    console.error('Échec de l\'écriture du fichier physique :', erreur);
+    afficherToast("La sauvegarde automatique a échoué. Vérifie l'accès au fichier.", 'erreur');
+    return false;
+  }
+}
+
+function planifierSauvegarde(){
+  state.meta.lastModified = new Date().toISOString();
+  if(isMobileFileMode){
+    try{ localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(state)); }catch(e){}
+    mettreAJourStatutFichier();
+    return;
+  }
+  if(!fileHandle) return;
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(async () => {
+    const ok = await ecrireEtatDansFichier();
+    if(ok) mettreAJourStatutFichier();
+  }, 450);
+}
+
+/* --- Ouverture en un clic depuis la liste des projets enregistrés --- */
+async function ouvrirProjetDepuisListe(id){
+  try{
+    const db = await ouvrirBaseHandles();
+    const entree = await new Promise((resolve, reject) => {
+      const tx = db.transaction(PROJECTS_STORE_NAME, 'readonly');
+      const requete = tx.objectStore(PROJECTS_STORE_NAME).get(id);
+      requete.onsuccess = () => resolve(requete.result || null);
+      requete.onerror = () => reject(requete.error);
+    });
+    db.close();
+    if(!entree || !entree.handle){
+      afficherToast("Ce projet n'est plus accessible.", 'erreur');
+      return;
+    }
+
+    const dejaAutorise = await verifierEtRestaurerPermission(entree.handle);
+    const autorise = dejaAutorise || await demanderPermission(entree.handle);
+    if(!autorise){
+      afficherToast("Accès au fichier refusé.", 'erreur');
+      return;
+    }
+
+    const fichier = await entree.handle.getFile();
+    const texte = await fichier.text();
+    const donnees = JSON.parse(texte);
+    state = fusionnerAvecEtatVide(donnees);
+    fileHandle = entree.handle;
+    await enregistrerHandleEnBase(entree.handle);
+    mettreAJourStatutFichier();
+    afficherToast('Projet « ' + (entree.name || 'sans nom') + ' » ouvert.', 'succes');
+    naviguerVers('accueil');
+    rendreTout();
+  }catch(erreur){
+    console.error(erreur);
+    afficherToast("Impossible d'ouvrir ce projet.", 'erreur');
+  }
+}
+
+/* --- Bouton « Enregistrer le projet » : checkpoint manuel + mise à jour de la liste --- */
+async function enregistrerProjetActuel(){
+  if(!fileHandle){
+    await creerNouveauFichierProjet();
+    return;
+  }
+  const ok = await ecrireEtatDansFichier();
+  if(!ok) return;
+  await ajouterOuMettreAJourProjetDansListe(fileHandle);
+  mettreAJourStatutFichier();
+  if(currentView === 'fichier') rendreFichier();
+  afficherToast('Projet enregistré dans la liste.', 'succes');
+}
+
+async function retirerProjetDeListe(id, evenement){
+  if(evenement) evenement.stopPropagation();
+  await supprimerProjetDeListe(id);
+  afficherToast('Projet retiré de la liste.', 'info');
+  if(currentView === 'fichier') rendreFichier();
+}
+
+/* =========================================================================
+   6. FALLBACK MOBILE — EXPORT / IMPORT MANUEL DU FICHIER JSON
+   ========================================================================= */
+function exporterFichierJson(){
+  const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const lien = document.createElement('a');
+  const nomFichier = (state.project.name || 'projet-asbl').toLowerCase().replace(/[^a-z0-9]+/g, '-') + '.json';
+  lien.href = url;
+  lien.download = nomFichier;
+  document.body.appendChild(lien);
+  lien.click();
+  document.body.removeChild(lien);
+  URL.revokeObjectURL(url);
+  afficherToast('Fichier JSON exporté.', 'succes');
+}
+
+function importerFichierJson(fichierInput){
+  const fichier = fichierInput.files && fichierInput.files[0];
+  if(!fichier) return;
+  const lecteur = new FileReader();
+  lecteur.onload = () => {
+    try{
+      const donnees = JSON.parse(lecteur.result);
+      state = fusionnerAvecEtatVide(donnees);
+      isMobileFileMode = true;
+      try{ localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(state)); }catch(e){}
+      mettreAJourStatutFichier();
+      afficherToast('Fichier JSON importé avec succès.', 'succes');
+      naviguerVers('accueil');
+      rendreTout();
+    }catch(erreur){
+      afficherToast("Le fichier sélectionné n'est pas valide.", 'erreur');
+    }
+  };
+  lecteur.readAsText(fichier);
+  fichierInput.value = '';
+}
+
+function mettreAJourStatutFichier(){
+  const texteEl = document.getElementById('file-status-text');
+  const sousTexteEl = document.getElementById('file-status-sub');
+  const boiteEl = document.getElementById('file-status-box');
+  const point = boiteEl.querySelector('.file-status-dot');
+  const heureMaj = state.meta && state.meta.lastModified ? new Date(state.meta.lastModified) : null;
+
+  if(!supportFileSystemAccess()){
+    if(isMobileFileMode){
+      texteEl.textContent = 'Mode mobile — cache local actif';
+      point.style.background = 'var(--accent)';
+      sousTexteEl.textContent = heureMaj ? ('Sauvegardé en cache à ' + formaterHeure(heureMaj) + ' · pense à exporter') : 'Pense à exporter régulièrement';
+    }else{
+      texteEl.textContent = 'Aucun fichier importé';
+      point.style.background = 'var(--danger)';
+      sousTexteEl.textContent = 'Importe un fichier JSON pour commencer';
+    }
+    return;
+  }
+
+  if(fileHandle){
+    texteEl.textContent = 'Connecté : ' + (fileHandle.name || 'fichier.json');
+    point.style.background = 'var(--success)';
+    sousTexteEl.textContent = heureMaj ? ('Sauvegardé à ' + formaterHeure(heureMaj)) : 'Sauvegarde automatique active';
+  }else{
+    texteEl.textContent = 'Aucun fichier connecté';
+    point.style.background = 'var(--danger)';
+    sousTexteEl.textContent = "Rends-toi dans l'onglet Fichier projet";
+  }
+  document.getElementById('sidebar-project-name').textContent = state.project.name || 'Mon ASBL';
+}
+
+async function initialiserPersistance(){
+  isMobileFileMode = !supportFileSystemAccess();
+
+  if(!isMobileFileMode){
+    const handleSauvegarde = await chargerHandleDepuisBase();
+    if(handleSauvegarde){
+      const dejaAutorise = await verifierEtRestaurerPermission(handleSauvegarde);
+      if(dejaAutorise){
+        try{
+          const fichier = await handleSauvegarde.getFile();
+          const texte = await fichier.text();
+          state = fusionnerAvecEtatVide(JSON.parse(texte));
+          fileHandle = handleSauvegarde;
+        }catch(erreur){
+          console.warn('Handle enregistré invalide, reconnexion nécessaire.', erreur);
+        }
+      }
+    }
+  }else{
+    try{
+      const cache = localStorage.getItem(LOCAL_CACHE_KEY);
+      if(cache) state = fusionnerAvecEtatVide(JSON.parse(cache));
+    }catch(e){}
+  }
+  mettreAJourStatutFichier();
+}
+
+/* =========================================================================
+   7. MOTEUR DE CALCUL MÉTIER
+   ========================================================================= */
+function trouverMembre(id){
+  return state.team.find(m => m.id === id) || null;
+}
+
+function trouverSession(id){
+  return state.executionSessions.find(s => s.id === id) || null;
+}
+
+/* --- Sessions d'exécution : base du prorata --- */
+function calculerNbJoursExecution(){
+  return state.executionSessions.length;
+}
+
+function calculerHeuresExecutionTotal(){
+  return state.executionSessions.reduce((somme, s) => somme + (Number(s.hours) || 0), 0);
+}
+
+function libelleModeDepense(mode){
+  return {
+    ponctuel_fixe: 'Ponctuel — montant fixe',
+    ponctuel_jour: 'Ponctuel — par jour d\'exécution',
+    hebdo: 'Hebdomadaire (prorata)',
+    mensuel: 'Mensuel (prorata)',
+    annuel: 'Annuel (prorata)',
+    horaire: 'Tarif horaire (× heures totales)'
+  }[mode] || mode;
+}
+
+/* --- Dépenses : calcul du montant attribué au projet selon le mode choisi --- */
+function calculerMontantAttribueDepense(depense){
+  const montant = Number(depense.amount) || 0;
+  const nbJours = calculerNbJoursExecution();
+  const heuresTotal = calculerHeuresExecutionTotal();
+  switch(depense.mode){
+    case 'ponctuel_fixe':
+      return montant;
+    case 'ponctuel_jour':
+      return montant * nbJours;
+    case 'hebdo':
+      return (montant / 7) * nbJours;
+    case 'mensuel':
+      return (montant / 30) * nbJours;
+    case 'annuel':
+      return (montant / 365) * nbJours;
+    case 'horaire':
+      return montant * heuresTotal;
+    default:
+      return montant;
+  }
+}
+
+function calculerDepensesProratees(){
+  let total = 0;
+  const lignes = state.expenses.map(d => {
+    const montantAttribue = calculerMontantAttribueDepense(d);
+    total += montantAttribue;
+    return Object.assign({}, d, { montantAttribue });
+  });
+  return { lignes, total };
+}
+
+/* --- Main d'œuvre : deux phases (préparation / exécution), split salarié vs bénévole --- */
+function calculerHeuresEntreeMainOeuvre(entree){
+  if(entree.phase === 'preparation'){
+    return (Number(entree.joursPreparation) || 0) * (Number(entree.heuresParJour) || 0);
+  }
+  return Number(entree.heures) || 0;
+}
+
+function calculerCoutMainOeuvre(){
+  let coutPreparationSalarie = 0, coutExecutionSalarie = 0;
+  let coutPreparationBenevole = 0, coutExecutionBenevole = 0;
+
+  state.labor.forEach(entree => {
+    const membre = trouverMembre(entree.memberId);
+    if(!membre) return;
+    const heures = calculerHeuresEntreeMainOeuvre(entree);
+    const taux = Number(membre.hourlyRate) || 0;
+    const cout = heures * taux;
+    if(membre.type === 'salarie'){
+      if(entree.phase === 'preparation') coutPreparationSalarie += cout; else coutExecutionSalarie += cout;
+    }else{
+      if(entree.phase === 'preparation') coutPreparationBenevole += cout; else coutExecutionBenevole += cout;
+    }
+  });
+
+  return {
+    coutPreparationSalarie, coutExecutionSalarie,
+    coutTotalSalarie: coutPreparationSalarie + coutExecutionSalarie,
+    coutPreparationBenevole, coutExecutionBenevole,
+    coutTotalBenevole: coutPreparationBenevole + coutExecutionBenevole
+  };
+}
+
+function calculerMetriques(){
+  const depensesProratees = calculerDepensesProratees();
+  const mainOeuvre = calculerCoutMainOeuvre();
+
+  const totalDepensesReelles = depensesProratees.total + mainOeuvre.coutTotalSalarie;
+  const totalValorise = totalDepensesReelles + mainOeuvre.coutTotalBenevole;
+
+  const totalTaches = state.tasks.length;
+  const tachesTerminees = state.tasks.filter(t => t.status === 'termine').length;
+  const tachesEnCours = state.tasks.filter(t => t.status === 'encours').length;
+  const avancement = totalTaches === 0 ? 0 : Math.round((tachesTerminees / totalTaches) * 100);
+
+  const prixTicket = Number(state.simulator.ticketPrice) || 0;
+  const nbParticipants = Number(state.simulator.participants) || 0;
+  const recettesSimulees = prixTicket * nbParticipants;
+  const resultatSimule = recettesSimulees - totalDepensesReelles;
+  const seuilRentabiliteParticipants = prixTicket > 0 ? Math.ceil(totalDepensesReelles / prixTicket) : null;
+
+  return {
+    depensesProrateesTotal: depensesProratees.total,
+    coutPreparationSalarie: mainOeuvre.coutPreparationSalarie,
+    coutExecutionSalarie: mainOeuvre.coutExecutionSalarie,
+    coutTotalSalarie: mainOeuvre.coutTotalSalarie,
+    coutPreparationBenevole: mainOeuvre.coutPreparationBenevole,
+    coutExecutionBenevole: mainOeuvre.coutExecutionBenevole,
+    coutTotalBenevole: mainOeuvre.coutTotalBenevole,
+    nbJoursExecution: calculerNbJoursExecution(),
+    heuresExecutionTotal: calculerHeuresExecutionTotal(),
+    totalDepensesReelles, totalValorise,
+    totalTaches, tachesTerminees, tachesEnCours, avancement,
+    prixTicket, nbParticipants, recettesSimulees, resultatSimule,
+    seuilRentabiliteParticipants
+  };
+}
+
+function libelleStatutTache(statut){
+  return { afaire: 'À faire', encours: 'En cours', termine: 'Terminé' }[statut] || statut;
+}
+
+function couleurStatutTache(statut){
+  return {
+    afaire: { bg: 'var(--surface-2)', fg: 'var(--ink-soft)' },
+    encours: { bg: 'var(--accent-soft)', fg: '#8a6100' },
+    termine: { bg: 'var(--success-soft)', fg: 'var(--success)' }
+  }[statut] || { bg: 'var(--surface-2)', fg: 'var(--ink-soft)' };
+}
+
+function libelleStatutProjet(statut){
+  return {
+    planification: 'Planification', encours: 'En cours', suspendu: 'Suspendu', termine: 'Terminé'
+  }[statut] || statut;
+}
+
+/* =========================================================================
+   8. RENDU — MODULE ACCUEIL (TABLEAU DE BORD)
+   ========================================================================= */
+function rendreAccueil(){
+  const m = calculerMetriques();
+  const conteneur = document.getElementById('view-accueil');
+
+  const estViable = m.resultatSimule >= 0;
+  const angleBalance = Math.max(-22, Math.min(22, (m.resultatSimule / Math.max(1, m.totalDepensesReelles || 1)) * 40));
+
+  conteneur.innerHTML = `
+    <div style="display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:22px;">
+      <div>
+        <h1 class="font-display" style="font-size:24px; font-weight:700; margin:0;">${echapperHtml(state.project.name || 'Mon projet ASBL')}</h1>
+        <p style="color:var(--ink-soft); font-size:14px; margin:4px 0 0 0;">Vue d'ensemble de l'avancement et de la viabilité financière</p>
+      </div>
+      <span class="badge" style="background:var(--primary-soft); color:var(--primary-dark);">${echapperHtml(libelleStatutProjet(state.project.status))}</span>
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr)); gap:16px; margin-bottom:20px;">
+      <div class="card" style="padding:18px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+          <span style="font-size:12.5px; font-weight:600; color:var(--ink-soft);">Avancement du projet</span>
+          <i data-lucide="trending-up" style="width:16px;height:16px; color:var(--primary);"></i>
+        </div>
+        <div class="kpi-value font-mono-num">${m.avancement}%</div>
+        <div class="progress-track" style="margin-top:10px;"><div class="progress-fill" style="width:${m.avancement}%;"></div></div>
+        <div style="font-size:12px; color:var(--ink-soft); margin-top:8px;">${m.tachesTerminees}/${m.totalTaches} tâches terminées</div>
+      </div>
+
+      <div class="card" style="padding:18px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+          <span style="font-size:12.5px; font-weight:600; color:var(--ink-soft);">Dépenses engagées</span>
+          <i data-lucide="banknote" style="width:16px;height:16px; color:var(--primary);"></i>
+        </div>
+        <div class="kpi-value font-mono-num">${formaterMontant(m.totalDepensesReelles)}</div>
+        <div style="font-size:12px; color:var(--ink-soft); margin-top:8px;">dont ${formaterMontant(m.coutTotalSalarie)} de main d'œuvre salariée</div>
+      </div>
+
+      <div class="card" style="padding:18px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+          <span style="font-size:12.5px; font-weight:600; color:var(--ink-soft);">Seuil de rentabilité</span>
+          <i data-lucide="scale" style="width:16px;height:16px; color:var(--primary);"></i>
+        </div>
+        <div class="kpi-value font-mono-num">${m.seuilRentabiliteParticipants == null ? '—' : m.seuilRentabiliteParticipants}</div>
+        <div style="font-size:12px; color:var(--ink-soft); margin-top:8px;">participants nécessaires au prix de ${formaterMontant(m.prixTicket)}</div>
+      </div>
+
+      <div class="card" style="padding:18px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+          <span style="font-size:12.5px; font-weight:600; color:var(--ink-soft);">Statut de viabilité</span>
+          <i data-lucide="${estViable ? 'circle-check' : 'circle-alert'}" style="width:16px;height:16px; color:${estViable ? 'var(--success)' : 'var(--danger)'};"></i>
+        </div>
+        <div class="kpi-value font-mono-num" style="color:${estViable ? 'var(--success)' : 'var(--danger)'};">${estViable ? '+' : ''}${formaterMontant(m.resultatSimule)}</div>
+        <div style="font-size:12px; color:var(--ink-soft); margin-top:8px;">${estViable ? 'Bénéfice estimé' : 'Déficit estimé'} pour ${m.nbParticipants} participants</div>
+      </div>
+    </div>
+
+    <div style="display:grid; grid-template-columns:1.3fr 1fr; gap:16px;" id="accueil-grid">
+      <div class="card" style="padding:20px;">
+        <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0 0 4px 0;">Point mort — coûts vs recettes</h3>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 14px 0;">Selon le prix de participation actuel de ${formaterMontant(m.prixTicket)}</p>
+        <div style="position:relative; height:230px;"><canvas id="profit-chart"></canvas></div>
+      </div>
+
+      <div class="card" style="padding:20px; display:flex; flex-direction:column; align-items:center;">
+        <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0 0 4px 0; align-self:flex-start;">Équilibre du projet</h3>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 10px 0; align-self:flex-start;">La balance penche vers les recettes ou les coûts</p>
+        <svg viewBox="0 0 260 190" style="width:100%; max-width:250px; margin-top:6px;">
+          <line x1="130" y1="20" x2="130" y2="60" stroke="var(--ink-soft)" stroke-width="4" stroke-linecap="round"/>
+          <circle cx="130" cy="16" r="7" fill="var(--ink-soft)"/>
+          <g transform="rotate(${angleBalance} 130 60)">
+            <line x1="20" y1="60" x2="240" y2="60" stroke="var(--ink)" stroke-width="5" stroke-linecap="round"/>
+            <line x1="30" y1="60" x2="30" y2="100" stroke="var(--ink-soft)" stroke-width="3"/>
+            <path d="M 8 100 A 22 22 0 0 0 52 100 Z" fill="${estViable ? 'var(--success-soft)' : 'var(--danger-soft)'}" stroke="${estViable ? 'var(--success)' : 'var(--danger)'}" stroke-width="2"/>
+            <line x1="230" y1="60" x2="230" y2="100" stroke="var(--ink-soft)" stroke-width="3"/>
+            <path d="M 208 100 A 22 22 0 0 0 252 100 Z" fill="${!estViable ? 'var(--success-soft)' : 'var(--danger-soft)'}" stroke="${!estViable ? 'var(--success)' : 'var(--danger)'}" stroke-width="2"/>
+          </g>
+          <rect x="90" y="172" width="80" height="10" rx="4" fill="var(--surface-2)"/>
+          <text x="30" y="150" font-size="11" fill="var(--ink-soft)" font-family="Inter" text-anchor="middle">Recettes</text>
+          <text x="230" y="150" font-size="11" fill="var(--ink-soft)" font-family="Inter" text-anchor="middle">Coûts</text>
+        </svg>
+        <div style="text-align:center; margin-top:6px;">
+          <div style="font-size:13px; font-weight:700; color:${estViable ? 'var(--success)' : 'var(--danger)'};">${estViable ? 'Projet viable' : 'Projet en déficit'}</div>
+          <div style="font-size:12px; color:var(--ink-soft); margin-top:2px;">Ajustable dans l'onglet Budget &amp; Simulateur</div>
+        </div>
+      </div>
+    </div>
+
+    <style>@media (max-width:1000px){ #accueil-grid{ grid-template-columns:1fr; } }</style>
+  `;
+
+  rafraichirIcones();
+  dessinerGraphiqueRentabilite(m);
+}
+
+function dessinerGraphiqueRentabilite(m){
+  const ctx = document.getElementById('profit-chart');
+  if(!ctx) return;
+  const prix = m.prixTicket || 0;
+  const maxParticipants = Math.max((m.seuilRentabiliteParticipants || 10) * 2, m.nbParticipants * 2, 20);
+  const pas = Math.max(1, Math.round(maxParticipants / 10));
+  const labels = [];
+  const recettesData = [];
+  const coutsData = [];
+  for(let p = 0; p <= maxParticipants; p += pas){
+    labels.push(p);
+    recettesData.push(p * prix);
+    coutsData.push(m.totalDepensesReelles);
+  }
+  if(profitChartInstance) profitChartInstance.destroy();
+  profitChartInstance = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Recettes', data: recettesData, borderColor: '#0F5257', backgroundColor: 'rgba(15,82,87,0.08)', fill: true, tension: 0.15, pointRadius: 0, borderWidth: 2.5 },
+        { label: 'Coûts totaux', data: coutsData, borderColor: '#E03131', backgroundColor: 'rgba(224,49,49,0.04)', fill: true, tension: 0, pointRadius: 0, borderWidth: 2.5, borderDash: [6,4] }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 12, font: { family: 'Inter', size: 11.5 } } },
+        tooltip: { callbacks: { label: (c) => c.dataset.label + ' : ' + formaterMontant(c.parsed.y) } }
+      },
+      scales: {
+        x: { title: { display: true, text: 'Nombre de participants', font: { family:'Inter', size: 11 } }, grid: { display: false } },
+        y: { title: { display: true, text: 'Montant (€)', font: { family:'Inter', size: 11 } }, grid: { color: '#EEF1EF' } }
+      }
+    }
+  });
+}
+
+/* =========================================================================
+   9. RENDU — MODULE CONFIGURATION & ÉQUIPE
+   ========================================================================= */
+function rendreConfig(){
+  const conteneur = document.getElementById('view-config');
+  const p = state.project;
+
+  const lignesEquipe = state.team.map(membre => `
+    <tr>
+      <td style="font-weight:600;">${echapperHtml(membre.name)}</td>
+      <td>${membre.role ? echapperHtml(membre.role) : '<span style="color:var(--ink-soft);">—</span>'}</td>
+      <td>
+        <span class="badge" style="background:${membre.type === 'salarie' ? 'var(--primary-soft)' : 'var(--accent-soft)'}; color:${membre.type === 'salarie' ? 'var(--primary-dark)' : '#8a6100'};">
+          ${membre.type === 'salarie' ? 'Salarié' : 'Bénévole'}
+        </span>
+      </td>
+      <td class="font-mono-num">${formaterMontant(membre.hourlyRate)} / h</td>
+      <td style="text-align:right; white-space:nowrap;">
+        <button class="btn-edit-ghost" onclick="ouvrirModalMembre('${membre.id}')" title="Modifier">
+          <i data-lucide="pencil" style="width:16px;height:16px;"></i>
+        </button>
+        <button class="btn-danger-ghost" onclick="supprimerMembre('${membre.id}')" title="Supprimer">
+          <i data-lucide="trash-2" style="width:16px;height:16px;"></i>
+        </button>
+      </td>
+    </tr>
+  `).join('');
+
+  conteneur.innerHTML = `
+    <h1 class="font-display" style="font-size:22px; font-weight:700; margin:0 0 20px 0;">Configuration &amp; Équipe</h1>
+
+    <div class="card" style="padding:22px; margin-bottom:20px;">
+      <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0 0 16px 0;">Fiche projet</h3>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr)); gap:14px;">
+        <div>
+          <label class="field-label">Nom du projet</label>
+          <input type="text" class="input-field" id="cfg-name" value="${echapperHtml(p.name)}">
+        </div>
+        <div>
+          <label class="field-label">Statut du projet</label>
+          <select class="input-field" id="cfg-status">
+            <option value="planification" ${p.status === 'planification' ? 'selected' : ''}>Planification</option>
+            <option value="encours" ${p.status === 'encours' ? 'selected' : ''}>En cours</option>
+            <option value="suspendu" ${p.status === 'suspendu' ? 'selected' : ''}>Suspendu</option>
+            <option value="termine" ${p.status === 'termine' ? 'selected' : ''}>Terminé</option>
+          </select>
+        </div>
+        <div>
+          <label class="field-label">Date de début</label>
+          <input type="date" class="input-field" id="cfg-start" value="${echapperHtml(p.startDate)}">
+        </div>
+        <div>
+          <label class="field-label">Date de fin</label>
+          <input type="date" class="input-field" id="cfg-end" value="${echapperHtml(p.endDate)}">
+        </div>
+        <div style="grid-column:1 / -1;">
+          <label class="field-label">Description</label>
+          <textarea class="input-field" id="cfg-desc" rows="3" style="resize:vertical;">${echapperHtml(p.description)}</textarea>
+        </div>
+        <div style="grid-column:1 / -1;">
+          <label class="field-label">Objectifs</label>
+          <textarea class="input-field" id="cfg-objectifs" rows="3" style="resize:vertical;" placeholder="Ex. Communication, bar, accueil, entretien, billetterie, accordage">${echapperHtml(p.objectives)}</textarea>
+          <p style="font-size:11.5px; color:var(--ink-soft); margin:6px 0 0 0;">Sépare chaque élément par une virgule ou par un tiret entouré d'espaces ( - ) — chacun deviendra automatiquement une tâche à faire lors de l'enregistrement.</p>
+        </div>
+      </div>
+      <button class="btn-primary" style="margin-top:16px;" onclick="enregistrerFicheProjet()">
+        <i data-lucide="save" style="width:15px;height:15px;"></i> Enregistrer la fiche projet
+      </button>
+    </div>
+
+    <div class="card" style="padding:22px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; flex-wrap:wrap; gap:10px;">
+        <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0;">Équipe (${state.team.length})</h3>
+        <button class="btn-primary" onclick="ouvrirModalMembre()">
+          <i data-lucide="user-plus" style="width:15px;height:15px;"></i> Ajouter un membre
+        </button>
+      </div>
+      ${state.team.length === 0 ? `
+        <div style="text-align:center; padding:36px 10px; color:var(--ink-soft);">
+          <i data-lucide="users" style="width:34px;height:34px; margin-bottom:10px; opacity:.5;"></i>
+          <p style="font-size:13.5px; margin:0;">Aucun membre pour l'instant. Ajoute des bénévoles ou salariés pour pouvoir leur assigner des tâches.</p>
+        </div>
+      ` : `
+        <div style="overflow-x:auto;">
+          <table class="data-table">
+            <thead><tr><th>Nom</th><th>Poste</th><th>Statut</th><th>Coût / valorisation horaire</th><th></th></tr></thead>
+            <tbody>${lignesEquipe}</tbody>
+          </table>
+        </div>
+      `}
+    </div>
+  `;
+  rafraichirIcones();
+}
+
+function genererTachesDepuisObjectifs(){
+  const texte = state.project.objectives || '';
+  const items = texte.split(/,|\s[-–—]\s/).map(s => s.trim()).filter(s => s.length > 0);
+  if(items.length === 0) return 0;
+
+  const labelsExistants = new Set(state.tasks.map(t => (t.label || '').trim().toLowerCase()));
+  let nbAjoutees = 0;
+  items.forEach(item => {
+    const cle = item.toLowerCase();
+    if(labelsExistants.has(cle)) return;
+    state.tasks.push({ id: genererId(), label: item, assigneeId: '', estimatedHours: 0, deadline: '', status: 'afaire' });
+    labelsExistants.add(cle);
+    nbAjoutees++;
+  });
+  return nbAjoutees;
+}
+
+function enregistrerFicheProjet(){
+  state.project.name = document.getElementById('cfg-name').value.trim() || 'Mon projet ASBL';
+  state.project.status = document.getElementById('cfg-status').value;
+  state.project.startDate = document.getElementById('cfg-start').value;
+  state.project.endDate = document.getElementById('cfg-end').value;
+  state.project.description = document.getElementById('cfg-desc').value;
+  state.project.objectives = document.getElementById('cfg-objectifs').value;
+  const nbTachesAjoutees = genererTachesDepuisObjectifs();
+  planifierSauvegarde();
+  mettreAJourStatutFichier();
+  rendreTaches();
+  rendreAccueil();
+  if(nbTachesAjoutees > 0){
+    afficherToast('Fiche enregistrée — ' + nbTachesAjoutees + ' tâche(s) créée(s) depuis les objectifs.', 'succes');
+  }else{
+    afficherToast('Fiche projet enregistrée.', 'succes');
+  }
+}
+
+function ouvrirModalMembre(id){
+  editingMemberId = id || null;
+  const membre = editingMemberId ? trouverMembre(editingMemberId) : null;
+  const racine = document.getElementById('modal-root');
+  racine.innerHTML = `
+    <div class="modal-backdrop show" id="modal-membre-backdrop">
+      <div class="modal-box">
+        <h3 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 16px 0;">${membre ? 'Modifier le membre' : "Ajouter un membre de l'équipe"}</h3>
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <div>
+            <label class="field-label">Nom</label>
+            <input type="text" class="input-field" id="membre-nom" placeholder="Ex. Sophie Dubois" value="${membre ? echapperHtml(membre.name) : ''}">
+          </div>
+          <div>
+            <label class="field-label">Poste (libre)</label>
+            <input type="text" class="input-field" id="membre-poste" placeholder="Ex. Bar, Accueil, Sonorisation..." value="${membre ? echapperHtml(membre.role || '') : ''}">
+          </div>
+          <div>
+            <label class="field-label">Statut</label>
+            <select class="input-field" id="membre-type" onchange="mettreAJourLabelTauxMembre()">
+              <option value="benevole" ${membre && membre.type === 'benevole' ? 'selected' : ''}>Bénévole</option>
+              <option value="salarie" ${membre && membre.type === 'salarie' ? 'selected' : ''}>Salarié</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label" id="membre-taux-label">Valorisation horaire (€/h)</label>
+            <input type="number" class="input-field" id="membre-taux" min="0" step="0.5" placeholder="0.00" value="${membre ? membre.hourlyRate : ''}">
+          </div>
+        </div>
+        <div style="display:flex; gap:10px; margin-top:20px; justify-content:flex-end;">
+          <button class="btn-secondary" onclick="fermerModal()">Annuler</button>
+          <button class="btn-primary" onclick="enregistrerMembre()"><i data-lucide="check" style="width:15px;height:15px;"></i> ${membre ? 'Enregistrer les modifications' : 'Ajouter'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
+  mettreAJourLabelTauxMembre();
+  document.getElementById('modal-membre-backdrop').addEventListener('click', (e) => { if(e.target.id === 'modal-membre-backdrop') fermerModal(); });
+}
+
+function mettreAJourLabelTauxMembre(){
+  const type = document.getElementById('membre-type').value;
+  document.getElementById('membre-taux-label').textContent = type === 'salarie' ? 'Coût horaire (€/h)' : 'Valorisation horaire (€/h)';
+}
+
+function enregistrerMembre(){
+  const nom = document.getElementById('membre-nom').value.trim();
+  const poste = document.getElementById('membre-poste').value.trim();
+  const type = document.getElementById('membre-type').value;
+  const taux = parseFloat(document.getElementById('membre-taux').value) || 0;
+  if(!nom){ afficherToast('Indique un nom pour ce membre.', 'erreur'); return; }
+
+  if(editingMemberId){
+    const membre = trouverMembre(editingMemberId);
+    if(membre){
+      membre.name = nom; membre.role = poste; membre.type = type; membre.hourlyRate = taux;
+    }
+    afficherToast('Membre modifié.', 'succes');
+  }else{
+    state.team.push({ id: genererId(), name: nom, role: poste, type, hourlyRate: taux });
+    afficherToast('Membre ajouté à l\'équipe.', 'succes');
+  }
+
+  editingMemberId = null;
+  planifierSauvegarde();
+  fermerModal();
+  rendreConfig();
+  rendreTaches();
+  rendreBudget();
+}
+
+function supprimerMembre(id){
+  const utilise = state.tasks.some(t => t.assigneeId === id);
+  if(utilise){
+    afficherToast('Ce membre est assigné à des tâches. Réassigne-les avant de le supprimer.', 'erreur');
+    return;
+  }
+  state.team = state.team.filter(m => m.id !== id);
+  planifierSauvegarde();
+  rendreConfig();
+  afficherToast('Membre supprimé.', 'info');
+}
+
+function fermerModal(){
+  document.getElementById('modal-root').innerHTML = '';
+}
+
+/* =========================================================================
+   10. RENDU — MODULE GESTION DES TÂCHES
+   ========================================================================= */
+let filtreStatutTache = 'toutes';
+
+function rendreTaches(){
+  const conteneur = document.getElementById('view-taches');
+  const m = calculerMetriques();
+
+  const tachesFiltrees = state.tasks.filter(t => filtreStatutTache === 'toutes' ? true : t.status === filtreStatutTache);
+
+  const lignesTaches = tachesFiltrees.map(tache => {
+    const membre = trouverMembre(tache.assigneeId);
+    const couleurs = couleurStatutTache(tache.status);
+    return `
+      <tr>
+        <td style="font-weight:600; max-width:220px;">${echapperHtml(tache.label)}</td>
+        <td>${membre ? echapperHtml(membre.name) : '<span style="color:var(--ink-soft);">Non assignée</span>'}</td>
+        <td class="font-mono-num">${Number(tache.estimatedHours) || 0} h</td>
+        <td>${formaterDate(tache.deadline)}</td>
+        <td>
+          <select class="input-field" style="padding:6px 8px; font-size:12.5px; background:${couleurs.bg}; color:${couleurs.fg}; border:none; font-weight:600;" onchange="changerStatutTache('${tache.id}', this.value)">
+            <option value="afaire" ${tache.status === 'afaire' ? 'selected' : ''}>À faire</option>
+            <option value="encours" ${tache.status === 'encours' ? 'selected' : ''}>En cours</option>
+            <option value="termine" ${tache.status === 'termine' ? 'selected' : ''}>Terminé</option>
+          </select>
+        </td>
+        <td style="text-align:right; white-space:nowrap;">
+          <button class="btn-edit-ghost" onclick="ouvrirModalTache('${tache.id}')" title="Modifier">
+            <i data-lucide="pencil" style="width:16px;height:16px;"></i>
+          </button>
+          <button class="btn-danger-ghost" onclick="supprimerTache('${tache.id}')" title="Supprimer">
+            <i data-lucide="trash-2" style="width:16px;height:16px;"></i>
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  conteneur.innerHTML = `
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:18px;">
+      <h1 class="font-display" style="font-size:22px; font-weight:700; margin:0;">Gestion des tâches</h1>
+      <button class="btn-primary" onclick="ouvrirModalTache()" ${state.team.length === 0 ? 'disabled title="Ajoute d\'abord un membre d\'équipe"' : ''}>
+        <i data-lucide="plus" style="width:15px;height:15px;"></i> Ajouter une tâche
+      </button>
+    </div>
+
+    <div class="card" style="padding:18px 22px; margin-bottom:18px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+        <span style="font-size:12.5px; font-weight:600; color:var(--ink-soft);">Progression générale</span>
+        <span class="font-mono-num" style="font-size:13px; font-weight:700;">${m.avancement}%</span>
+      </div>
+      <div class="progress-track"><div class="progress-fill" style="width:${m.avancement}%;"></div></div>
+      <div style="display:flex; gap:16px; margin-top:10px; font-size:12px; color:var(--ink-soft); flex-wrap:wrap;">
+        <span>${m.totalTaches} tâche(s) au total</span>
+        <span>${m.tachesEnCours} en cours</span>
+        <span>${m.tachesTerminees} terminée(s)</span>
+      </div>
+    </div>
+
+    <div class="card" style="padding:20px;">
+      <div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap;">
+        ${['toutes','afaire','encours','termine'].map(s => `
+          <button class="btn-secondary" style="${filtreStatutTache === s ? 'background:var(--primary); color:white; border-color:var(--primary);' : ''} padding:7px 14px; font-size:13px;" onclick="filtrerTaches('${s}')">
+            ${s === 'toutes' ? 'Toutes' : libelleStatutTache(s)}
+          </button>
+        `).join('')}
+      </div>
+      ${tachesFiltrees.length === 0 ? `
+        <div style="text-align:center; padding:40px 10px; color:var(--ink-soft);">
+          <i data-lucide="list-checks" style="width:34px;height:34px; margin-bottom:10px; opacity:.5;"></i>
+          <p style="font-size:13.5px; margin:0;">${state.tasks.length === 0 ? "Aucune tâche pour l'instant. Crée ta première tâche pour suivre l'avancement du projet." : "Aucune tâche ne correspond à ce filtre."}</p>
+        </div>
+      ` : `
+        <div style="overflow-x:auto;">
+          <table class="data-table">
+            <thead><tr><th>Tâche</th><th>Assigné à</th><th>Temps estimé</th><th>Échéance</th><th>Statut</th><th></th></tr></thead>
+            <tbody>${lignesTaches}</tbody>
+          </table>
+        </div>
+      `}
+    </div>
+  `;
+  rafraichirIcones();
+}
+
+function filtrerTaches(statut){
+  filtreStatutTache = statut;
+  rendreTaches();
+}
+
+function ouvrirModalTache(id){
+  editingTaskId = id || null;
+  const tache = editingTaskId ? state.tasks.find(t => t.id === editingTaskId) : null;
+  if(!tache && state.team.length === 0){ afficherToast("Ajoute d'abord au moins un membre d'équipe.", 'erreur'); return; }
+  const optionsMembres = '<option value="">Non assignée</option>' + state.team.map(mb => `<option value="${mb.id}" ${tache && tache.assigneeId === mb.id ? 'selected' : ''}>${echapperHtml(mb.name)}</option>`).join('');
+  const racine = document.getElementById('modal-root');
+  racine.innerHTML = `
+    <div class="modal-backdrop show" id="modal-tache-backdrop">
+      <div class="modal-box">
+        <h3 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 16px 0;">${tache ? 'Modifier la tâche' : 'Ajouter une tâche'}</h3>
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <div>
+            <label class="field-label">Libellé de la tâche</label>
+            <input type="text" class="input-field" id="tache-label" placeholder="Ex. Réserver la salle" value="${tache ? echapperHtml(tache.label) : ''}">
+          </div>
+          <div>
+            <label class="field-label">Attribution</label>
+            <select class="input-field" id="tache-assignee">${optionsMembres}</select>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div>
+              <label class="field-label">Temps estimé (h)</label>
+              <input type="number" class="input-field" id="tache-heures" min="0" step="0.5" placeholder="0" value="${tache ? Number(tache.estimatedHours) || 0 : ''}">
+            </div>
+            <div>
+              <label class="field-label">Date limite</label>
+              <input type="date" class="input-field" id="tache-deadline" value="${tache ? echapperHtml(tache.deadline || '') : ''}">
+            </div>
+          </div>
+          <div>
+            <label class="field-label">Statut</label>
+            <select class="input-field" id="tache-statut">
+              <option value="afaire" ${tache && tache.status === 'afaire' ? 'selected' : ''}>À faire</option>
+              <option value="encours" ${tache && tache.status === 'encours' ? 'selected' : ''}>En cours</option>
+              <option value="termine" ${tache && tache.status === 'termine' ? 'selected' : ''}>Terminé</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:flex; gap:10px; margin-top:20px; justify-content:flex-end;">
+          <button class="btn-secondary" onclick="fermerModal()">Annuler</button>
+          <button class="btn-primary" onclick="enregistrerTache()"><i data-lucide="check" style="width:15px;height:15px;"></i> ${tache ? 'Enregistrer les modifications' : 'Ajouter'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
+  document.getElementById('modal-tache-backdrop').addEventListener('click', (e) => { if(e.target.id === 'modal-tache-backdrop') fermerModal(); });
+}
+
+function enregistrerTache(){
+  const label = document.getElementById('tache-label').value.trim();
+  const assigneeId = document.getElementById('tache-assignee').value;
+  const heures = parseFloat(document.getElementById('tache-heures').value) || 0;
+  const deadline = document.getElementById('tache-deadline').value;
+  const statut = document.getElementById('tache-statut').value;
+  if(!label){ afficherToast('Indique un libellé pour cette tâche.', 'erreur'); return; }
+
+  if(editingTaskId){
+    const tache = state.tasks.find(t => t.id === editingTaskId);
+    if(tache){
+      tache.label = label; tache.assigneeId = assigneeId; tache.estimatedHours = heures; tache.deadline = deadline; tache.status = statut;
+    }
+    afficherToast('Tâche modifiée.', 'succes');
+  }else{
+    state.tasks.push({ id: genererId(), label, assigneeId, estimatedHours: heures, deadline, status: statut });
+    afficherToast('Tâche ajoutée.', 'succes');
+  }
+  editingTaskId = null;
+  planifierSauvegarde();
+  fermerModal();
+  rendreTaches();
+  rendreAccueil();
+  rendreBudget();
+}
+
+function changerStatutTache(id, nouveauStatut){
+  const tache = state.tasks.find(t => t.id === id);
+  if(!tache) return;
+  tache.status = nouveauStatut;
+  planifierSauvegarde();
+  rendreTaches();
+  rendreAccueil();
+  afficherToast('Statut mis à jour.', 'info');
+}
+
+function supprimerTache(id){
+  state.tasks = state.tasks.filter(t => t.id !== id);
+  planifierSauvegarde();
+  rendreTaches();
+  rendreAccueil();
+  rendreBudget();
+  afficherToast('Tâche supprimée.', 'info');
+}
+
+/* =========================================================================
+   11. RENDU — MODULE BUDGET & SIMULATEUR
+   ========================================================================= */
+function rendreBudget(){
+  const conteneur = document.getElementById('view-budget');
+  const m = calculerMetriques();
+
+  /* --- Sessions d'exécution --- */
+  const lignesSessions = state.executionSessions.slice().sort((a,b) => (a.date || '').localeCompare(b.date || '')).map(s => `
+    <tr>
+      <td style="font-weight:600;">${formaterDate(s.date)}</td>
+      <td>${s.label ? echapperHtml(s.label) : '<span style="color:var(--ink-soft);">—</span>'}</td>
+      <td class="font-mono-num">${Number(s.hours) || 0} h</td>
+      <td style="text-align:right; white-space:nowrap;">
+        <button class="btn-edit-ghost" onclick="ouvrirModalSession('${s.id}')" title="Modifier">
+          <i data-lucide="pencil" style="width:16px;height:16px;"></i>
+        </button>
+        <button class="btn-danger-ghost" onclick="supprimerSession('${s.id}')" title="Supprimer">
+          <i data-lucide="trash-2" style="width:16px;height:16px;"></i>
+        </button>
+      </td>
+    </tr>
+  `).join('');
+
+  /* --- Dépenses proratées --- */
+  const depensesCalculees = calculerDepensesProratees().lignes;
+  const lignesDepenses = depensesCalculees.map(d => `
+    <tr>
+      <td style="font-weight:600; max-width:180px;">${echapperHtml(d.label)}</td>
+      <td><span class="badge" style="background:var(--primary-soft); color:var(--primary-dark);">${libelleModeDepense(d.mode)}</span></td>
+      <td class="font-mono-num">${formaterMontant(d.amount)}</td>
+      <td class="font-mono-num" style="font-weight:700;">${formaterMontant(d.montantAttribue)}</td>
+      <td style="text-align:right; white-space:nowrap;">
+        <button class="btn-edit-ghost" onclick="ouvrirModalDepense('${d.id}')" title="Modifier">
+          <i data-lucide="pencil" style="width:16px;height:16px;"></i>
+        </button>
+        <button class="btn-danger-ghost" onclick="supprimerDepense('${d.id}')" title="Supprimer">
+          <i data-lucide="trash-2" style="width:16px;height:16px;"></i>
+        </button>
+      </td>
+    </tr>
+  `).join('');
+
+  /* --- Main d'œuvre : préparation --- */
+  const lignesPrep = state.labor.filter(e => e.phase === 'preparation').map(e => {
+    const membre = trouverMembre(e.memberId);
+    const heures = calculerHeuresEntreeMainOeuvre(e);
+    const cout = heures * (membre ? (Number(membre.hourlyRate) || 0) : 0);
+    return `
+      <tr>
+        <td style="font-weight:600;">${membre ? echapperHtml(membre.name) : '<span style="color:var(--ink-soft);">Membre supprimé</span>'}</td>
+        <td class="font-mono-num">${Number(e.joursPreparation) || 0} j</td>
+        <td class="font-mono-num">${Number(e.heuresParJour) || 0} h/j</td>
+        <td class="font-mono-num" style="font-weight:700;">${heures} h</td>
+        <td class="font-mono-num">${formaterMontant(cout)}</td>
+        <td style="text-align:right; white-space:nowrap;">
+          <button class="btn-edit-ghost" onclick="ouvrirModalMainOeuvrePrep('${e.id}')" title="Modifier">
+            <i data-lucide="pencil" style="width:16px;height:16px;"></i>
+          </button>
+          <button class="btn-danger-ghost" onclick="supprimerMainOeuvre('${e.id}')" title="Supprimer">
+            <i data-lucide="trash-2" style="width:16px;height:16px;"></i>
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  /* --- Main d'œuvre : exécution --- */
+  const lignesExec = state.labor.filter(e => e.phase === 'execution').map(e => {
+    const membre = trouverMembre(e.memberId);
+    const session = trouverSession(e.sessionId);
+    const heures = calculerHeuresEntreeMainOeuvre(e);
+    const cout = heures * (membre ? (Number(membre.hourlyRate) || 0) : 0);
+    return `
+      <tr>
+        <td style="font-weight:600;">${membre ? echapperHtml(membre.name) : '<span style="color:var(--ink-soft);">Membre supprimé</span>'}</td>
+        <td>${session ? (formaterDate(session.date) + (session.label ? ' — ' + echapperHtml(session.label) : '')) : '<span style="color:var(--ink-soft);">Session supprimée</span>'}</td>
+        <td class="font-mono-num" style="font-weight:700;">${heures} h</td>
+        <td class="font-mono-num">${formaterMontant(cout)}</td>
+        <td style="text-align:right; white-space:nowrap;">
+          <button class="btn-edit-ghost" onclick="ouvrirModalMainOeuvreExec('${e.id}')" title="Modifier">
+            <i data-lucide="pencil" style="width:16px;height:16px;"></i>
+          </button>
+          <button class="btn-danger-ghost" onclick="supprimerMainOeuvre('${e.id}')" title="Supprimer">
+            <i data-lucide="trash-2" style="width:16px;height:16px;"></i>
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  conteneur.innerHTML = `
+    <h1 class="font-display" style="font-size:22px; font-weight:700; margin:0 0 20px 0;">Budget &amp; Simulateur</h1>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px,1fr)); gap:14px; margin-bottom:20px;">
+      <div class="card" style="padding:16px;">
+        <div style="font-size:12px; color:var(--ink-soft); font-weight:600; margin-bottom:6px;">Dépenses attribuées au projet</div>
+        <div class="font-mono-num" style="font-size:19px; font-weight:700;">${formaterMontant(m.depensesProrateesTotal)}</div>
+      </div>
+      <div class="card" style="padding:16px;">
+        <div style="font-size:12px; color:var(--ink-soft); font-weight:600; margin-bottom:6px;">Main d'œuvre salariée (total)</div>
+        <div class="font-mono-num" style="font-size:19px; font-weight:700;">${formaterMontant(m.coutTotalSalarie)}</div>
+        <div style="font-size:11px; color:var(--ink-soft); margin-top:4px;">Prépa ${formaterMontant(m.coutPreparationSalarie)} · Exéc ${formaterMontant(m.coutExecutionSalarie)}</div>
+      </div>
+      <div class="card" style="padding:16px;">
+        <div style="font-size:12px; color:var(--ink-soft); font-weight:600; margin-bottom:6px;">Total dépenses réelles (cash)</div>
+        <div class="font-mono-num" style="font-size:19px; font-weight:700; color:var(--primary-dark);">${formaterMontant(m.totalDepensesReelles)}</div>
+      </div>
+      <div class="card" style="padding:16px;">
+        <div style="font-size:12px; color:var(--ink-soft); font-weight:600; margin-bottom:6px;">Valorisation du bénévolat</div>
+        <div class="font-mono-num" style="font-size:19px; font-weight:700; color:var(--accent);">${formaterMontant(m.coutTotalBenevole)}</div>
+        <div style="font-size:11px; color:var(--ink-soft); margin-top:4px;">Prépa ${formaterMontant(m.coutPreparationBenevole)} · Exéc ${formaterMontant(m.coutExecutionBenevole)}</div>
+      </div>
+    </div>
+
+    <div class="card" style="padding:22px; margin-bottom:20px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; flex-wrap:wrap; gap:10px;">
+        <div>
+          <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0;">Sessions d'exécution du projet</h3>
+          <p style="font-size:12px; color:var(--ink-soft); margin:2px 0 0 0;">Chaque date de l'événement (concert, exposition, cours...) sert de base au calcul du prorata</p>
+        </div>
+        <button class="btn-primary" onclick="ouvrirModalSession()">
+          <i data-lucide="calendar-plus" style="width:15px;height:15px;"></i> Ajouter une session
+        </button>
+      </div>
+      <div style="display:flex; gap:16px; margin:10px 0 14px 0; font-size:12.5px; color:var(--ink-soft); flex-wrap:wrap;">
+        <span><strong style="color:var(--ink);">${m.nbJoursExecution}</strong> jour(s) d'exécution</span>
+        <span><strong style="color:var(--ink);">${m.heuresExecutionTotal}</strong> heure(s) au total</span>
+      </div>
+      ${state.executionSessions.length === 0 ? `
+        <div style="text-align:center; padding:24px 10px; color:var(--ink-soft);">
+          <p style="font-size:13.5px; margin:0;">Aucune session définie. Ajoute chaque jour ou soirée d'exécution (ex. 10/08/2026 — 4h).</p>
+        </div>
+      ` : `
+        <div style="overflow-x:auto;">
+          <table class="data-table">
+            <thead><tr><th>Date</th><th>Libellé</th><th>Durée</th><th></th></tr></thead>
+            <tbody>${lignesSessions}</tbody>
+          </table>
+        </div>
+      `}
+    </div>
+
+    <div class="card" style="padding:22px; margin-bottom:20px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; flex-wrap:wrap; gap:10px;">
+        <div>
+          <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0;">Dépenses</h3>
+          <p style="font-size:12px; color:var(--ink-soft); margin:2px 0 0 0;">Chaque coût est automatiquement proratisé selon son mode de calcul</p>
+        </div>
+        <button class="btn-primary" onclick="ouvrirModalDepense()">
+          <i data-lucide="plus" style="width:15px;height:15px;"></i> Ajouter un coût
+        </button>
+      </div>
+      ${state.expenses.length === 0 ? `
+        <div style="text-align:center; padding:30px 10px; color:var(--ink-soft);">
+          <p style="font-size:13.5px; margin:0;">Aucun coût saisi. Ajoute l'assurance, l'internet, le matériel, les boissons, etc.</p>
+        </div>
+      ` : `
+        <div style="overflow-x:auto;">
+          <table class="data-table">
+            <thead><tr><th>Libellé</th><th>Mode de calcul</th><th>Montant saisi</th><th>Attribué au projet</th><th></th></tr></thead>
+            <tbody>${lignesDepenses}</tbody>
+          </table>
+        </div>
+      `}
+    </div>
+
+    <div class="card" style="padding:22px; margin-bottom:20px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; flex-wrap:wrap; gap:10px;">
+        <div>
+          <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0;">Main d'œuvre — Préparation du projet</h3>
+          <p style="font-size:12px; color:var(--ink-soft); margin:2px 0 0 0;">Ex. 6 jours à 1h/jour de préparation</p>
+        </div>
+        <button class="btn-primary" onclick="ouvrirModalMainOeuvrePrep()" ${state.team.length === 0 ? 'disabled title="Ajoute d\'abord un membre d\'équipe"' : ''}>
+          <i data-lucide="plus" style="width:15px;height:15px;"></i> Ajouter
+        </button>
+      </div>
+      ${lignesPrep === '' ? `
+        <div style="text-align:center; padding:24px 10px; color:var(--ink-soft);">
+          <p style="font-size:13.5px; margin:0;">Aucune heure de préparation encodée.</p>
+        </div>
+      ` : `
+        <div style="overflow-x:auto; margin-top:10px;">
+          <table class="data-table">
+            <thead><tr><th>Membre</th><th>Jours</th><th>H / jour</th><th>Total heures</th><th>Coût</th><th></th></tr></thead>
+            <tbody>${lignesPrep}</tbody>
+          </table>
+        </div>
+      `}
+    </div>
+
+    <div class="card" style="padding:22px; margin-bottom:20px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; flex-wrap:wrap; gap:10px;">
+        <div>
+          <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0;">Main d'œuvre — Exécution du projet</h3>
+          <p style="font-size:12px; color:var(--ink-soft); margin:2px 0 0 0;">Ex. 3h le 10/08/2026 pour un concert intimiste</p>
+        </div>
+        <button class="btn-primary" onclick="ouvrirModalMainOeuvreExec()" ${(state.team.length === 0 || state.executionSessions.length === 0) ? 'disabled title="Ajoute d\'abord un membre et une session d\'exécution"' : ''}>
+          <i data-lucide="plus" style="width:15px;height:15px;"></i> Ajouter
+        </button>
+      </div>
+      ${lignesExec === '' ? `
+        <div style="text-align:center; padding:24px 10px; color:var(--ink-soft);">
+          <p style="font-size:13.5px; margin:0;">Aucune heure d'exécution encodée.</p>
+        </div>
+      ` : `
+        <div style="overflow-x:auto; margin-top:10px;">
+          <table class="data-table">
+            <thead><tr><th>Membre</th><th>Session</th><th>Heures</th><th>Coût</th><th></th></tr></thead>
+            <tbody>${lignesExec}</tbody>
+          </table>
+        </div>
+      `}
+    </div>
+
+    <div class="card" style="padding:22px;">
+      <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0 0 4px 0;">Simulateur de rentabilité</h3>
+      <p style="font-size:12px; color:var(--ink-soft); margin:0 0 20px 0;">Fais varier les curseurs pour tester différents scénarios en temps réel</p>
+
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px,1fr)); gap:24px; margin-bottom:22px;">
+        <div>
+          <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+            <label class="field-label" style="margin:0;">Nombre de participants</label>
+            <span class="font-mono-num" style="font-weight:700; font-size:14px;" id="sim-participants-val">${m.nbParticipants}</span>
+          </div>
+          <input type="range" class="slider" id="sim-participants" min="0" max="500" step="1" value="${m.nbParticipants}" oninput="ajusterSimulateur()">
+        </div>
+        <div>
+          <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+            <label class="field-label" style="margin:0;">Prix du ticket / participation</label>
+            <span class="font-mono-num" style="font-weight:700; font-size:14px;" id="sim-prix-val">${formaterMontant(m.prixTicket)}</span>
+          </div>
+          <input type="range" class="slider" id="sim-prix" min="0" max="500" step="1" value="${m.prixTicket}" oninput="ajusterSimulateur()">
+        </div>
+      </div>
+
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px,1fr)); gap:14px;" id="sim-resultats">
+        ${rendreResultatsSimulateur(m)}
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
+}
+
+function rendreResultatsSimulateur(m){
+  const estViable = m.resultatSimule >= 0;
+  return `
+    <div class="card" style="padding:16px; background:var(--surface-2); border:none;">
+      <div style="font-size:12px; color:var(--ink-soft); font-weight:600; margin-bottom:6px;">Recettes simulées</div>
+      <div class="font-mono-num" style="font-size:19px; font-weight:700;">${formaterMontant(m.recettesSimulees)}</div>
+    </div>
+    <div class="card" style="padding:16px; background:var(--surface-2); border:none;">
+      <div style="font-size:12px; color:var(--ink-soft); font-weight:600; margin-bottom:6px;">Seuil de rentabilité</div>
+      <div class="font-mono-num" style="font-size:19px; font-weight:700;">${m.seuilRentabiliteParticipants == null ? '—' : m.seuilRentabiliteParticipants + ' participants'}</div>
+    </div>
+    <div class="card" style="padding:16px; background:${estViable ? 'var(--success-soft)' : 'var(--danger-soft)'}; border:none;">
+      <div style="font-size:12px; color:${estViable ? 'var(--success)' : 'var(--danger)'}; font-weight:600; margin-bottom:6px;">${estViable ? 'Bénéfice estimé' : 'Déficit estimé'}</div>
+      <div class="font-mono-num" style="font-size:19px; font-weight:700; color:${estViable ? 'var(--success)' : 'var(--danger)'};">${estViable ? '+' : ''}${formaterMontant(m.resultatSimule)}</div>
+    </div>
+  `;
+}
+
+function ajusterSimulateur(){
+  const participants = parseInt(document.getElementById('sim-participants').value, 10) || 0;
+  const prix = parseInt(document.getElementById('sim-prix').value, 10) || 0;
+  state.simulator.participants = participants;
+  state.simulator.ticketPrice = prix;
+  document.getElementById('sim-participants-val').textContent = participants;
+  document.getElementById('sim-prix-val').textContent = formaterMontant(prix);
+  const m = calculerMetriques();
+  document.getElementById('sim-resultats').innerHTML = rendreResultatsSimulateur(m);
+  planifierSauvegarde();
+  if(currentView === 'accueil') rendreAccueil();
+}
+
+/* --- Sessions d'exécution : CRUD --- */
+function ouvrirModalSession(id){
+  editingSessionId = id || null;
+  const session = editingSessionId ? trouverSession(editingSessionId) : null;
+  const racine = document.getElementById('modal-root');
+  racine.innerHTML = `
+    <div class="modal-backdrop show" id="modal-session-backdrop">
+      <div class="modal-box">
+        <h3 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 16px 0;">${session ? "Modifier la session" : "Ajouter une session d'exécution"}</h3>
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <div>
+            <label class="field-label">Date</label>
+            <input type="date" class="input-field" id="session-date" value="${session ? echapperHtml(session.date || '') : ''}">
+          </div>
+          <div>
+            <label class="field-label">Libellé (optionnel)</label>
+            <input type="text" class="input-field" id="session-label" placeholder="Ex. Soirée concert" value="${session ? echapperHtml(session.label || '') : ''}">
+          </div>
+          <div>
+            <label class="field-label">Durée (heures)</label>
+            <input type="number" class="input-field" id="session-heures" min="0" step="0.5" placeholder="Ex. 4" value="${session ? Number(session.hours) || 0 : ''}">
+          </div>
+        </div>
+        <div style="display:flex; gap:10px; margin-top:20px; justify-content:flex-end;">
+          <button class="btn-secondary" onclick="fermerModal()">Annuler</button>
+          <button class="btn-primary" onclick="enregistrerSession()"><i data-lucide="check" style="width:15px;height:15px;"></i> ${session ? 'Enregistrer les modifications' : 'Ajouter'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
+  document.getElementById('modal-session-backdrop').addEventListener('click', (e) => { if(e.target.id === 'modal-session-backdrop') fermerModal(); });
+}
+
+function enregistrerSession(){
+  const date = document.getElementById('session-date').value;
+  const label = document.getElementById('session-label').value.trim();
+  const heures = parseFloat(document.getElementById('session-heures').value) || 0;
+  if(!date){ afficherToast('Indique la date de cette session.', 'erreur'); return; }
+
+  if(editingSessionId){
+    const session = trouverSession(editingSessionId);
+    if(session){ session.date = date; session.label = label; session.hours = heures; }
+    afficherToast('Session modifiée.', 'succes');
+  }else{
+    state.executionSessions.push({ id: genererId(), date, label, hours: heures });
+    afficherToast('Session ajoutée.', 'succes');
+  }
+  editingSessionId = null;
+  planifierSauvegarde();
+  fermerModal();
+  rendreBudget();
+  rendreAccueil();
+}
+
+function supprimerSession(id){
+  const utilisee = state.labor.some(e => e.sessionId === id);
+  if(utilisee){
+    afficherToast('Cette session est utilisée dans la main d\'œuvre. Supprime d\'abord ces entrées.', 'erreur');
+    return;
+  }
+  state.executionSessions = state.executionSessions.filter(s => s.id !== id);
+  planifierSauvegarde();
+  rendreBudget();
+  rendreAccueil();
+  afficherToast('Session supprimée.', 'info');
+}
+
+/* --- Dépenses : CRUD avec mode de calcul --- */
+function ouvrirModalDepense(id){
+  editingExpenseId = id || null;
+  const depense = editingExpenseId ? state.expenses.find(d => d.id === editingExpenseId) : null;
+  const racine = document.getElementById('modal-root');
+  racine.innerHTML = `
+    <div class="modal-backdrop show" id="modal-depense-backdrop">
+      <div class="modal-box">
+        <h3 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 16px 0;">${depense ? 'Modifier le coût' : 'Ajouter un coût'}</h3>
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <div>
+            <label class="field-label">Libellé</label>
+            <input type="text" class="input-field" id="depense-label" placeholder="Ex. Assurance annuelle" value="${depense ? echapperHtml(depense.label) : ''}">
+          </div>
+          <div>
+            <label class="field-label">Mode de calcul</label>
+            <select class="input-field" id="depense-mode" onchange="mettreAJourLabelMontantDepense()">
+              <option value="ponctuel_fixe" ${depense && depense.mode === 'ponctuel_fixe' ? 'selected' : ''}>Ponctuel — montant fixe</option>
+              <option value="ponctuel_jour" ${depense && depense.mode === 'ponctuel_jour' ? 'selected' : ''}>Ponctuel — par jour d'exécution</option>
+              <option value="hebdo" ${depense && depense.mode === 'hebdo' ? 'selected' : ''}>Hebdomadaire (prorata sur les jours d'exécution)</option>
+              <option value="mensuel" ${depense && depense.mode === 'mensuel' ? 'selected' : ''}>Mensuel (prorata sur les jours d'exécution)</option>
+              <option value="annuel" ${depense && depense.mode === 'annuel' ? 'selected' : ''}>Annuel (prorata sur les jours d'exécution)</option>
+              <option value="horaire" ${depense && depense.mode === 'horaire' ? 'selected' : ''}>Tarif horaire (× heures totales d'exécution)</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label" id="depense-montant-label">Montant (€)</label>
+            <input type="number" class="input-field" id="depense-montant" min="0" step="0.5" placeholder="0.00" value="${depense ? depense.amount : ''}">
+          </div>
+          <p id="depense-aide" style="font-size:11.5px; color:var(--ink-soft); margin:0;">Montant fixe, non multiplié par le nombre de jours.</p>
+        </div>
+        <div style="display:flex; gap:10px; margin-top:20px; justify-content:flex-end;">
+          <button class="btn-secondary" onclick="fermerModal()">Annuler</button>
+          <button class="btn-primary" onclick="enregistrerDepense()"><i data-lucide="check" style="width:15px;height:15px;"></i> ${depense ? 'Enregistrer les modifications' : 'Ajouter'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
+  mettreAJourLabelMontantDepense();
+  document.getElementById('modal-depense-backdrop').addEventListener('click', (e) => { if(e.target.id === 'modal-depense-backdrop') fermerModal(); });
+}
+
+function mettreAJourLabelMontantDepense(){
+  const mode = document.getElementById('depense-mode').value;
+  const labels = {
+    ponctuel_fixe: 'Montant (€)',
+    ponctuel_jour: 'Montant par jour (€)',
+    hebdo: 'Montant hebdomadaire (€)',
+    mensuel: 'Montant mensuel (€)',
+    annuel: 'Montant annuel (€)',
+    horaire: 'Tarif horaire (€ / h)'
+  };
+  const aides = {
+    ponctuel_fixe: 'Montant fixe, non multiplié par le nombre de jours.',
+    ponctuel_jour: 'Ce montant sera multiplié par le nombre de jours d\'exécution.',
+    hebdo: 'Le montant hebdomadaire est divisé par 7 puis multiplié par le nombre de jours d\'exécution.',
+    mensuel: 'Le montant mensuel est divisé par 30 puis multiplié par le nombre de jours d\'exécution.',
+    annuel: 'Le montant annuel est divisé par 365 puis multiplié par le nombre de jours d\'exécution.',
+    horaire: 'Ce tarif horaire est multiplié par le total des heures de toutes les sessions d\'exécution.'
+  };
+  document.getElementById('depense-montant-label').textContent = labels[mode];
+  document.getElementById('depense-aide').textContent = aides[mode];
+}
+
+function enregistrerDepense(){
+  const label = document.getElementById('depense-label').value.trim();
+  const mode = document.getElementById('depense-mode').value;
+  const montant = parseFloat(document.getElementById('depense-montant').value) || 0;
+  if(!label){ afficherToast('Indique un libellé pour ce coût.', 'erreur'); return; }
+
+  if(editingExpenseId){
+    const depense = state.expenses.find(d => d.id === editingExpenseId);
+    if(depense){ depense.label = label; depense.mode = mode; depense.amount = montant; }
+    afficherToast('Coût modifié.', 'succes');
+  }else{
+    state.expenses.push({ id: genererId(), label, mode, amount: montant });
+    afficherToast('Coût ajouté.', 'succes');
+  }
+  editingExpenseId = null;
+  planifierSauvegarde();
+  fermerModal();
+  rendreBudget();
+  rendreAccueil();
+}
+
+function supprimerDepense(id){
+  state.expenses = state.expenses.filter(d => d.id !== id);
+  planifierSauvegarde();
+  rendreBudget();
+  rendreAccueil();
+  afficherToast('Coût supprimé.', 'info');
+}
+
+/* --- Main d'œuvre : CRUD (préparation + exécution) --- */
+function ouvrirModalMainOeuvrePrep(id){
+  editingLaborId = id || null;
+  const entree = editingLaborId ? state.labor.find(e => e.id === editingLaborId) : null;
+  if(!entree && state.team.length === 0){ afficherToast("Ajoute d'abord au moins un membre d'équipe.", 'erreur'); return; }
+  const optionsMembres = state.team.map(mb => `<option value="${mb.id}" ${entree && entree.memberId === mb.id ? 'selected' : ''}>${echapperHtml(mb.name)} (${mb.type === 'salarie' ? 'Salarié' : 'Bénévole'})</option>`).join('');
+  const racine = document.getElementById('modal-root');
+  racine.innerHTML = `
+    <div class="modal-backdrop show" id="modal-prep-backdrop">
+      <div class="modal-box">
+        <h3 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 16px 0;">${entree ? 'Modifier les heures de préparation' : 'Ajouter des heures de préparation'}</h3>
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <div>
+            <label class="field-label">Membre</label>
+            <select class="input-field" id="prep-membre">${optionsMembres}</select>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div>
+              <label class="field-label">Nombre de jours</label>
+              <input type="number" class="input-field" id="prep-jours" min="0" step="0.5" placeholder="Ex. 6" value="${entree ? Number(entree.joursPreparation) || 0 : ''}">
+            </div>
+            <div>
+              <label class="field-label">Heures / jour</label>
+              <input type="number" class="input-field" id="prep-heures-jour" min="0" step="0.25" placeholder="Ex. 1" value="${entree ? Number(entree.heuresParJour) || 0 : ''}">
+            </div>
+          </div>
+        </div>
+        <div style="display:flex; gap:10px; margin-top:20px; justify-content:flex-end;">
+          <button class="btn-secondary" onclick="fermerModal()">Annuler</button>
+          <button class="btn-primary" onclick="enregistrerMainOeuvrePrep()"><i data-lucide="check" style="width:15px;height:15px;"></i> ${entree ? 'Enregistrer les modifications' : 'Ajouter'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
+  document.getElementById('modal-prep-backdrop').addEventListener('click', (e) => { if(e.target.id === 'modal-prep-backdrop') fermerModal(); });
+}
+
+function enregistrerMainOeuvrePrep(){
+  const memberId = document.getElementById('prep-membre').value;
+  const joursPreparation = parseFloat(document.getElementById('prep-jours').value) || 0;
+  const heuresParJour = parseFloat(document.getElementById('prep-heures-jour').value) || 0;
+  if(joursPreparation <= 0 || heuresParJour <= 0){ afficherToast('Indique un nombre de jours et d\'heures valide.', 'erreur'); return; }
+
+  if(editingLaborId){
+    const entree = state.labor.find(e => e.id === editingLaborId);
+    if(entree){ entree.memberId = memberId; entree.joursPreparation = joursPreparation; entree.heuresParJour = heuresParJour; }
+    afficherToast('Heures de préparation modifiées.', 'succes');
+  }else{
+    state.labor.push({ id: genererId(), memberId, phase: 'preparation', joursPreparation, heuresParJour });
+    afficherToast('Heures de préparation ajoutées.', 'succes');
+  }
+  editingLaborId = null;
+  planifierSauvegarde();
+  fermerModal();
+  rendreBudget();
+  rendreAccueil();
+}
+
+function ouvrirModalMainOeuvreExec(id){
+  editingLaborId = id || null;
+  const entree = editingLaborId ? state.labor.find(e => e.id === editingLaborId) : null;
+  if(!entree && state.team.length === 0){ afficherToast("Ajoute d'abord au moins un membre d'équipe.", 'erreur'); return; }
+  if(!entree && state.executionSessions.length === 0){ afficherToast("Ajoute d'abord au moins une session d'exécution.", 'erreur'); return; }
+  const optionsMembres = state.team.map(mb => `<option value="${mb.id}" ${entree && entree.memberId === mb.id ? 'selected' : ''}>${echapperHtml(mb.name)} (${mb.type === 'salarie' ? 'Salarié' : 'Bénévole'})</option>`).join('');
+  const optionsSessions = state.executionSessions.slice().sort((a,b) => (a.date || '').localeCompare(b.date || '')).map(s => `<option value="${s.id}" ${entree && entree.sessionId === s.id ? 'selected' : ''}>${formaterDate(s.date)}${s.label ? ' — ' + echapperHtml(s.label) : ''} (${s.hours || 0} h prévues)</option>`).join('');
+  const racine = document.getElementById('modal-root');
+  racine.innerHTML = `
+    <div class="modal-backdrop show" id="modal-exec-backdrop">
+      <div class="modal-box">
+        <h3 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 16px 0;">${entree ? "Modifier les heures d'exécution" : "Ajouter des heures d'exécution"}</h3>
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <div>
+            <label class="field-label">Membre</label>
+            <select class="input-field" id="exec-membre">${optionsMembres}</select>
+          </div>
+          <div>
+            <label class="field-label">Session d'exécution</label>
+            <select class="input-field" id="exec-session">${optionsSessions}</select>
+          </div>
+          <div>
+            <label class="field-label">Heures travaillées ce jour-là</label>
+            <input type="number" class="input-field" id="exec-heures" min="0" step="0.25" placeholder="Ex. 3" value="${entree ? Number(entree.heures) || 0 : ''}">
+          </div>
+        </div>
+        <div style="display:flex; gap:10px; margin-top:20px; justify-content:flex-end;">
+          <button class="btn-secondary" onclick="fermerModal()">Annuler</button>
+          <button class="btn-primary" onclick="enregistrerMainOeuvreExec()"><i data-lucide="check" style="width:15px;height:15px;"></i> ${entree ? 'Enregistrer les modifications' : 'Ajouter'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
+  document.getElementById('modal-exec-backdrop').addEventListener('click', (e) => { if(e.target.id === 'modal-exec-backdrop') fermerModal(); });
+}
+
+function enregistrerMainOeuvreExec(){
+  const memberId = document.getElementById('exec-membre').value;
+  const sessionId = document.getElementById('exec-session').value;
+  const heures = parseFloat(document.getElementById('exec-heures').value) || 0;
+  if(heures <= 0){ afficherToast('Indique un nombre d\'heures valide.', 'erreur'); return; }
+
+  if(editingLaborId){
+    const entree = state.labor.find(e => e.id === editingLaborId);
+    if(entree){ entree.memberId = memberId; entree.sessionId = sessionId; entree.heures = heures; }
+    afficherToast('Heures d\'exécution modifiées.', 'succes');
+  }else{
+    state.labor.push({ id: genererId(), memberId, phase: 'execution', sessionId, heures });
+    afficherToast('Heures d\'exécution ajoutées.', 'succes');
+  }
+  editingLaborId = null;
+  planifierSauvegarde();
+  fermerModal();
+  rendreBudget();
+  rendreAccueil();
+}
+
+function supprimerMainOeuvre(id){
+  state.labor = state.labor.filter(e => e.id !== id);
+  planifierSauvegarde();
+  rendreBudget();
+  rendreAccueil();
+  afficherToast('Entrée supprimée.', 'info');
+}
+
+/* =========================================================================
+   12. RENDU — MODULE FICHIER PROJET
+   ========================================================================= */
+function rendreFichier(){
+  const conteneur = document.getElementById('view-fichier');
+  const supporte = supportFileSystemAccess();
+
+  if(supporte){
+    conteneur.innerHTML = `
+      <h1 class="font-display" style="font-size:22px; font-weight:700; margin:0 0 6px 0;">Fichier projet</h1>
+      <p style="font-size:13.5px; color:var(--ink-soft); margin:0 0 22px 0;">Connecte un fichier physique sur ton disque. Chaque modification y sera automatiquement enregistrée.</p>
+
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px,1fr)); gap:16px; margin-bottom:20px;">
+        <div class="card" style="padding:24px;">
+          <i data-lucide="file-plus-2" style="width:26px;height:26px; color:var(--primary); margin-bottom:12px;"></i>
+          <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0 0 6px 0;">Créer un nouveau fichier</h3>
+          <p style="font-size:13px; color:var(--ink-soft); margin:0 0 16px 0;">Démarre un projet vierge et choisis où l'enregistrer sur ton disque (ex. Documents).</p>
+          <button class="btn-primary" onclick="creerNouveauFichierProjet()"><i data-lucide="plus" style="width:15px;height:15px;"></i> Créer un fichier</button>
+        </div>
+        <div class="card" style="padding:24px;">
+          <i data-lucide="save" style="width:26px;height:26px; color:var(--primary); margin-bottom:12px;"></i>
+          <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0 0 6px 0;">Enregistrer le projet</h3>
+          <p style="font-size:13px; color:var(--ink-soft); margin:0 0 16px 0;">Checkpoint manuel — écrit dans le fichier connecté et (re)place le projet en tête de la liste ci-dessous, avec son nom et sa date d'exécution.</p>
+          <button class="btn-primary" onclick="enregistrerProjetActuel()"><i data-lucide="save" style="width:15px;height:15px;"></i> Enregistrer maintenant</button>
+        </div>
+      </div>
+
+      <div class="card" style="padding:22px; margin-bottom:20px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; flex-wrap:wrap; gap:10px;">
+          <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0;">Projets enregistrés</h3>
+          <button class="btn-secondary" style="font-size:12.5px; padding:7px 12px;" onclick="ouvrirFichierProjetExistant()">
+            <i data-lucide="folder-open" style="width:14px;height:14px;"></i> Parcourir un fichier ailleurs...
+          </button>
+        </div>
+        <p style="font-size:12px; color:var(--ink-soft); margin:2px 0 14px 0;">Clique sur un projet pour l'ouvrir directement — aucune recherche de dossier nécessaire.</p>
+        <div id="saved-projects-list">
+          <div style="text-align:center; padding:24px 10px; color:var(--ink-soft);">
+            <p style="font-size:13px; margin:0;">Chargement...</p>
+          </div>
+        </div>
+      </div>
+
+      ${fileHandle ? `
+        <div class="card" style="padding:18px 22px; display:flex; align-items:center; justify-content:between; gap:12px; flex-wrap:wrap;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span class="file-status-dot" style="background:var(--success); position:relative; top:0;"></span>
+            <div>
+              <div style="font-weight:700; font-size:14px;">${echapperHtml(fileHandle.name)}</div>
+              <div style="font-size:12px; color:var(--ink-soft);">Sauvegarde automatique active</div>
+            </div>
+          </div>
+        </div>
+      ` : `
+        <div class="card" style="padding:18px 22px; background:var(--danger-soft); border:none;">
+          <div style="font-size:13.5px; color:var(--danger); font-weight:600;">Aucun fichier connecté actuellement — les modifications ne seront pas sauvegardées tant qu'un fichier n'est pas créé ou ouvert.</div>
+        </div>
+      `}
+    `;
+    rafraichirIcones();
+    chargerEtAfficherProjetsEnregistres();
+  }else{
+    conteneur.innerHTML = `
+      <h1 class="font-display" style="font-size:22px; font-weight:700; margin:0 0 6px 0;">Fichier projet</h1>
+      <p style="font-size:13.5px; color:var(--ink-soft); margin:0 0 22px 0;">Ton navigateur mobile ne permet pas de lier un fichier physique automatiquement. Exporte régulièrement ton fichier JSON et importe-le pour synchroniser avec ton laptop.</p>
+
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px,1fr)); gap:16px;">
+        <div class="card" style="padding:24px;">
+          <i data-lucide="download" style="width:26px;height:26px; color:var(--primary); margin-bottom:12px;"></i>
+          <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0 0 6px 0;">Exporter le fichier JSON</h3>
+          <p style="font-size:13px; color:var(--ink-soft); margin:0 0 16px 0;">Télécharge une copie complète du projet à transférer sur ton laptop.</p>
+          <button class="btn-primary" onclick="exporterFichierJson()"><i data-lucide="download" style="width:15px;height:15px;"></i> Exporter maintenant</button>
+        </div>
+        <div class="card" style="padding:24px;">
+          <i data-lucide="upload" style="width:26px;height:26px; color:var(--primary); margin-bottom:12px;"></i>
+          <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0 0 6px 0;">Importer un fichier JSON</h3>
+          <p style="font-size:13px; color:var(--ink-soft); margin:0 0 16px 0;">Charge un fichier de projet exporté depuis ton laptop.</p>
+          <label class="btn-secondary" style="cursor:pointer;">
+            <i data-lucide="folder-open" style="width:15px;height:15px;"></i> Choisir un fichier
+            <input type="file" accept="application/json" style="display:none;" onchange="importerFichierJson(this)">
+          </label>
+        </div>
+      </div>
+
+      <div class="card" style="padding:18px 22px; margin-top:16px; background:var(--accent-soft); border:none;">
+        <div style="font-size:13px; color:#8a6100; font-weight:600;">Astuce : tes données sont conservées temporairement dans ce navigateur, mais exporte après chaque session importante pour éviter toute perte.</div>
+      </div>
+    `;
+    rafraichirIcones();
+  }
+}
+
+async function chargerEtAfficherProjetsEnregistres(){
+  const conteneurListe = document.getElementById('saved-projects-list');
+  if(!conteneurListe) return;
+  const projets = await listerProjetsEnregistres();
+  if(!document.getElementById('saved-projects-list')) return;
+
+  if(projets.length === 0){
+    conteneurListe.innerHTML = `
+      <div style="text-align:center; padding:24px 10px; color:var(--ink-soft);">
+        <i data-lucide="folder-open" style="width:30px;height:30px; margin-bottom:8px; opacity:.5;"></i>
+        <p style="font-size:13px; margin:0;">Aucun projet enregistré pour l'instant. Crée un fichier ou clique sur « Enregistrer maintenant » pour qu'il apparaisse ici.</p>
+      </div>
+    `;
+    rafraichirIcones();
+    return;
+  }
+
+  conteneurListe.innerHTML = projets.map(p => {
+    const titre = p.dateLabel ? (echapperHtml(p.name) + ' — ' + echapperHtml(p.dateLabel)) : echapperHtml(p.name);
+    return `
+      <div onclick="ouvrirProjetDepuisListe('${p.id}')" style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:13px 14px; border-radius:12px; border:1px solid var(--border); margin-bottom:8px; cursor:pointer; transition:background .12s ease;" onmouseover="this.style.background='var(--surface-2)'" onmouseout="this.style.background='transparent'">
+        <div style="display:flex; align-items:center; gap:12px; min-width:0;">
+          <div style="width:36px;height:36px;border-radius:10px; background:var(--primary-soft); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+            <i data-lucide="folder-open" style="width:17px;height:17px; color:var(--primary-dark);"></i>
+          </div>
+          <div style="min-width:0;">
+            <div style="font-weight:700; font-size:13.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${titre}</div>
+            <div style="font-size:11.5px; color:var(--ink-soft);">Enregistré ${formaterDate(p.lastSaved)}</div>
+          </div>
+        </div>
+        <button class="btn-danger-ghost" onclick="retirerProjetDeListe('${p.id}', event)" title="Retirer de la liste">
+          <i data-lucide="x" style="width:15px;height:15px;"></i>
+        </button>
+      </div>
+    `;
+  }).join('');
+  rafraichirIcones();
+}
+
+/* =========================================================================
+   13. NAVIGATION ENTRE LES MODULES
+   ========================================================================= */
+function naviguerVers(vue){
+  currentView = vue;
+  document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active'));
+  document.getElementById('view-' + vue).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === vue));
+  document.querySelectorAll('.bottom-nav-item').forEach(el => el.classList.toggle('active', el.dataset.view === vue));
+  document.getElementById('main-area').scrollTop = 0;
+  rendreVue(vue);
+}
+
+function rendreVue(vue){
+  if(vue === 'accueil') rendreAccueil();
+  else if(vue === 'config') rendreConfig();
+  else if(vue === 'taches') rendreTaches();
+  else if(vue === 'budget') rendreBudget();
+  else if(vue === 'fichier') rendreFichier();
+}
+
+function rendreTout(){
+  rendreVue(currentView);
+  mettreAJourStatutFichier();
+}
+
+/* =========================================================================
+   14. INITIALISATION
+   ========================================================================= */
+document.addEventListener('DOMContentLoaded', async () => {
+  rafraichirIcones();
+
+  document.querySelectorAll('.nav-item').forEach(el => {
+    el.addEventListener('click', () => naviguerVers(el.dataset.view));
+  });
+  document.querySelectorAll('.bottom-nav-item').forEach(el => {
+    el.addEventListener('click', () => naviguerVers(el.dataset.view));
+  });
+
+  await initialiserPersistance();
+  rendreTout();
+
+  if(supportFileSystemAccess() && !fileHandle){
+    naviguerVers('fichier');
+    afficherToast("Crée ou ouvre un fichier de projet pour commencer.", 'info');
+  }else if(!supportFileSystemAccess()){
+    naviguerVers('fichier');
+  }
+});
+</script>
+
+</body>
+</html>
