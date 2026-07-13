@@ -4,9 +4,23 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover">
 <title>Gestion ASBL — Tableau de bord</title>
+
+<!-- ==================== PWA : identité installable ==================== -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0F5257">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Gestion ASBL">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<!-- ======================================================================= -->
+
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+<!-- Client Supabase : gère la synchronisation temps réel entre appareils -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 <style>
@@ -211,12 +225,22 @@
       <div class="nav-item" data-view="fichier">
         <i data-lucide="folder-cog"></i><span>Fichier projet</span>
       </div>
+      <div class="nav-item" data-view="sync">
+        <i data-lucide="refresh-cw"></i><span>Synchronisation</span>
+      </div>
     </nav>
 
     <div class="file-status-box" id="file-status-box">
       <span class="file-status-dot" style="background:var(--danger);"></span><span id="file-status-text">Aucun fichier connecté</span>
       <div id="file-status-sub" style="margin-top:4px; color:#8b9a9c;"></div>
     </div>
+    <div class="file-status-box" id="sync-status-box" style="margin-top:8px;">
+      <span class="file-status-dot" id="sync-status-dot" style="background:var(--ink-soft);"></span><span id="sync-status-text">Synchronisation non configurée</span>
+    </div>
+
+    <button id="install-pwa-btn" class="btn-primary" style="display:none; margin-top:10px; width:100%; justify-content:center;">
+      <i data-lucide="download" style="width:15px;height:15px;"></i> Installer l'application
+    </button>
   </aside>
 
   <main class="main-area" id="main-area">
@@ -226,6 +250,7 @@
     <section class="view-section" id="view-taches"></section>
     <section class="view-section" id="view-budget"></section>
     <section class="view-section" id="view-fichier"></section>
+    <section class="view-section" id="view-sync"></section>
 
   </main>
 
@@ -245,6 +270,9 @@
       </div>
       <div class="bottom-nav-item" data-view="fichier">
         <i data-lucide="folder-cog"></i><span>Fichier</span>
+      </div>
+      <div class="bottom-nav-item" data-view="sync">
+        <i data-lucide="refresh-cw"></i><span>Sync</span>
       </div>
     </div>
   </nav>
@@ -302,6 +330,228 @@ let editingMemberId = null;
 let editingExpenseId = null;
 let editingSessionId = null;
 let editingLaborId = null;
+
+/* =========================================================================
+   SYNCHRONISATION TEMPS RÉEL ENTRE APPAREILS (Supabase)
+   =========================================================================
+   PRINCIPE : tous les appareils qui utilisent le même "code d'équipe"
+   partagent la même ligne dans une table Supabase. Dès qu'un appareil
+   modifie le projet, la nouvelle version est envoyée au serveur, qui la
+   redistribue instantanément à tous les autres appareils connectés
+   (via WebSocket — pas besoin de rafraîchir la page).
+
+   ⚠️ CONFIGURATION REQUISE : remplacez les deux valeurs ci-dessous par
+   celles de votre propre projet Supabase (gratuit) avant de déployer.
+   Voir le guide fourni pour la marche à suivre pas à pas.
+   ========================================================================= */
+const SUPABASE_URL = 'https://axihduusjdpxbpzohajd.supabase.co/rest/v1/';        // ex : https://xxxxxxxx.supabase.co
+const SUPABASE_ANON_KEY = 'sb_publishable_rr6dnokRb9Lgik33AfAucQ_sKt_FR6o';
+
+const SYNC_TABLE = 'asbl_projects';
+const SYNC_CODE_KEY = 'asbl_sync_code';
+const CLIENT_ID_KEY = 'asbl_client_id';
+
+let supabaseClient = null;
+let syncCode = null;
+let syncChannel = null;
+let syncPushTimer = null;
+let syncStatus = 'non-configure'; // 'non-configure' | 'deconnecte' | 'connexion' | 'connecte' | 'erreur'
+
+// Identifiant unique à cet appareil/onglet, pour ignorer nos propres
+// mises à jour quand elles nous reviennent via le temps réel.
+function obtenirIdClient(){
+  let id = localStorage.getItem(CLIENT_ID_KEY);
+  if(!id){
+    id = 'client_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+    localStorage.setItem(CLIENT_ID_KEY, id);
+  }
+  return id;
+}
+const idClientActuel = obtenirIdClient();
+
+function supabaseEstConfigure(){
+  return !!SUPABASE_URL && SUPABASE_URL.indexOf('https://') === 0 &&
+         !!SUPABASE_ANON_KEY && SUPABASE_ANON_KEY.length > 20;
+}
+
+function initialiserSupabase(){
+  if(!supabaseEstConfigure()) { syncStatus = 'non-configure'; return; }
+  if(supabaseClient) return;
+  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+}
+
+function genererCodeAleatoire(){
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sans caractères ambigus (0/O, 1/I...)
+  let code = '';
+  for(let i = 0; i < 6; i++){
+    code += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return code;
+}
+
+/* --- Créer un nouveau code d'équipe et y publier le projet actuel --- */
+async function creerNouveauCodeSync(){
+  if(!supabaseEstConfigure()){
+    afficherToast("La synchronisation n'est pas encore configurée.", 'erreur');
+    return;
+  }
+  initialiserSupabase();
+  const nouveauCode = genererCodeAleatoire();
+  syncStatus = 'connexion';
+  mettreAJourStatutSync();
+  try{
+    const { error } = await supabaseClient.from(SYNC_TABLE).insert({
+      id: nouveauCode,
+      data: state,
+      updated_at: new Date().toISOString(),
+      updated_by: idClientActuel
+    });
+    if(error) throw error;
+    syncCode = nouveauCode;
+    localStorage.setItem(SYNC_CODE_KEY, syncCode);
+    souscrireAuTempsReel();
+    syncStatus = 'connecte';
+    afficherToast('Code d\'équipe créé : ' + syncCode, 'succes');
+  }catch(erreur){
+    console.error(erreur);
+    syncStatus = 'erreur';
+    afficherToast("Impossible de créer le code de synchronisation.", 'erreur');
+  }
+  mettreAJourStatutSync();
+  if(currentView === 'sync') rendreSync();
+}
+
+/* --- Rejoindre un code d'équipe existant : on récupère la dernière version --- */
+async function rejoindreCodeSync(code){
+  const codePropre = (code || '').trim().toUpperCase();
+  if(!codePropre){
+    afficherToast('Entre un code d\'équipe valide.', 'erreur');
+    return;
+  }
+  if(!supabaseEstConfigure()){
+    afficherToast("La synchronisation n'est pas encore configurée.", 'erreur');
+    return;
+  }
+  initialiserSupabase();
+  syncStatus = 'connexion';
+  mettreAJourStatutSync();
+  try{
+    const { data: ligne, error } = await supabaseClient
+      .from(SYNC_TABLE)
+      .select('*')
+      .eq('id', codePropre)
+      .maybeSingle();
+    if(error) throw error;
+    if(!ligne){
+      afficherToast("Aucune équipe ne correspond à ce code.", 'erreur');
+      syncStatus = 'erreur';
+      mettreAJourStatutSync();
+      return;
+    }
+    state = fusionnerAvecEtatVide(ligne.data);
+    syncCode = codePropre;
+    localStorage.setItem(SYNC_CODE_KEY, syncCode);
+    souscrireAuTempsReel();
+    syncStatus = 'connecte';
+    afficherToast('Connecté à l\'équipe ' + syncCode + '.', 'succes');
+    naviguerVers('accueil');
+    rendreTout();
+  }catch(erreur){
+    console.error(erreur);
+    syncStatus = 'erreur';
+    afficherToast("Impossible de rejoindre ce code.", 'erreur');
+  }
+  mettreAJourStatutSync();
+  if(currentView === 'sync') rendreSync();
+}
+
+/* --- Se déconnecter du code d'équipe (reste en local uniquement) --- */
+function quitterSync(){
+  if(syncChannel){ supabaseClient.removeChannel(syncChannel); syncChannel = null; }
+  syncCode = null;
+  localStorage.removeItem(SYNC_CODE_KEY);
+  syncStatus = 'deconnecte';
+  mettreAJourStatutSync();
+  afficherToast('Synchronisation désactivée sur cet appareil.', 'info');
+  if(currentView === 'sync') rendreSync();
+}
+
+/* --- Écoute en temps réel des changements envoyés par les AUTRES appareils --- */
+function souscrireAuTempsReel(){
+  if(!supabaseClient || !syncCode) return;
+  if(syncChannel) supabaseClient.removeChannel(syncChannel);
+
+  syncChannel = supabaseClient
+    .channel('sync-' + syncCode)
+    .on('postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: SYNC_TABLE, filter: 'id=eq.' + syncCode },
+      (payload) => {
+        // On ignore nos propres écritures (déjà appliquées localement)
+        if(payload.new.updated_by === idClientActuel) return;
+        state = fusionnerAvecEtatVide(payload.new.data);
+        rendreTout();
+        afficherToast('Mis à jour depuis un autre appareil.', 'info');
+      }
+    )
+    .subscribe((statut) => {
+      if(statut === 'SUBSCRIBED'){ syncStatus = 'connecte'; }
+      else if(statut === 'CHANNEL_ERROR' || statut === 'TIMED_OUT'){ syncStatus = 'erreur'; }
+      mettreAJourStatutSync();
+    });
+}
+
+/* --- Envoi (avec anti-rebond) de l'état local vers le serveur --- */
+function planifierEnvoiCloud(){
+  if(!syncCode || !supabaseClient) return;
+  clearTimeout(syncPushTimer);
+  syncPushTimer = setTimeout(async () => {
+    try{
+      const { error } = await supabaseClient.from(SYNC_TABLE).update({
+        data: state,
+        updated_at: new Date().toISOString(),
+        updated_by: idClientActuel
+      }).eq('id', syncCode);
+      if(error) throw error;
+      syncStatus = 'connecte';
+    }catch(erreur){
+      console.error(erreur);
+      syncStatus = 'erreur';
+    }
+    mettreAJourStatutSync();
+  }, 700);
+}
+
+/* --- Reprise automatique de la synchronisation au chargement de la page --- */
+function reprendreSyncSiExistant(){
+  if(!supabaseEstConfigure()) return;
+  const codeEnregistre = localStorage.getItem(SYNC_CODE_KEY);
+  if(!codeEnregistre) return;
+  initialiserSupabase();
+  syncCode = codeEnregistre;
+  syncStatus = 'connexion';
+  souscrireAuTempsReel();
+}
+
+function mettreAJourStatutSync(){
+  const pastille = document.getElementById('sync-status-dot');
+  const texte = document.getElementById('sync-status-text');
+  if(!pastille || !texte) return;
+  const couleurs = {
+    'non-configure': ['var(--ink-soft)', 'Synchronisation non configurée'],
+    'deconnecte': ['var(--ink-soft)', 'Synchronisation désactivée'],
+    'connexion': ['var(--accent)', 'Connexion en cours…'],
+    'connecte': ['var(--success)', 'Synchronisé — équipe ' + (syncCode || '')],
+    'erreur': ['var(--danger)', 'Erreur de synchronisation']
+  };
+  const [couleur, libelle] = couleurs[syncStatus] || couleurs['non-configure'];
+  pastille.style.background = couleur;
+  texte.textContent = libelle;
+
+  const pastilleVue = document.getElementById('sync-status-dot-view');
+  const texteVue = document.getElementById('sync-status-text-view');
+  if(pastilleVue) pastilleVue.style.background = couleur;
+  if(texteVue) texteVue.textContent = libelle;
+}
 
 function genererId(){
   return 'id_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 9);
@@ -624,6 +874,11 @@ async function ecrireEtatDansFichier(){
 
 function planifierSauvegarde(){
   state.meta.lastModified = new Date().toISOString();
+
+  // Synchronisation cloud : envoyée à chaque modification, indépendamment
+  // du mode de sauvegarde locale (fichier physique ou cache mobile).
+  planifierEnvoiCloud();
+
   if(isMobileFileMode){
     try{ localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(state)); }catch(e){}
     mettreAJourStatutFichier();
@@ -2195,11 +2450,86 @@ function rendreVue(vue){
   else if(vue === 'taches') rendreTaches();
   else if(vue === 'budget') rendreBudget();
   else if(vue === 'fichier') rendreFichier();
+  else if(vue === 'sync') rendreSync();
 }
 
 function rendreTout(){
   rendreVue(currentView);
   mettreAJourStatutFichier();
+  mettreAJourStatutSync();
+}
+
+/* =========================================================================
+   VUE : SYNCHRONISATION ENTRE APPAREILS
+   ========================================================================= */
+function rendreSync(){
+  const conteneur = document.getElementById('view-sync');
+
+  if(!supabaseEstConfigure()){
+    conteneur.innerHTML = `
+      <h1 class="font-display" style="font-size:22px; font-weight:700; margin:0 0 6px 0;">Synchronisation</h1>
+      <div class="card" style="padding:22px; background:var(--accent-soft); border:none;">
+        <div style="font-size:13.5px; color:#8a6100; font-weight:600;">
+          La synchronisation entre appareils n'est pas encore configurée pour cette installation.
+          Suis le guide de configuration Supabase fourni pour l'activer.
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  if(syncCode){
+    conteneur.innerHTML = `
+      <h1 class="font-display" style="font-size:22px; font-weight:700; margin:0 0 6px 0;">Synchronisation</h1>
+      <p style="font-size:13.5px; color:var(--ink-soft); margin:0 0 22px 0;">Ce projet est synchronisé en temps réel avec tous les appareils utilisant le même code d'équipe.</p>
+
+      <div class="card" style="padding:24px; max-width:480px;">
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+          <span class="file-status-dot" id="sync-status-dot-view" style="background:var(--success); position:relative; top:0;"></span>
+          <span style="font-weight:700; font-size:14px;" id="sync-status-text-view">Synchronisé</span>
+        </div>
+        <div class="field-label">Code d'équipe</div>
+        <div style="display:flex; align-items:center; gap:10px; margin-bottom:18px;">
+          <div style="font-family:'IBM Plex Mono',monospace; font-size:22px; font-weight:700; letter-spacing:.08em; background:var(--surface-2); padding:10px 16px; border-radius:10px;">${echapperHtml(syncCode)}</div>
+          <button class="btn-secondary" onclick="navigator.clipboard.writeText('${syncCode}'); afficherToast('Code copié.', 'succes');">
+            <i data-lucide="copy" style="width:14px;height:14px;"></i> Copier
+          </button>
+        </div>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 16px 0;">Communique ce code aux autres membres de l'équipe pour qu'ils voient et modifient le même projet en direct.</p>
+        <button class="btn-secondary" onclick="quitterSync()" style="color:var(--danger); border-color:var(--danger-soft);">
+          <i data-lucide="unlink" style="width:14px;height:14px;"></i> Désactiver la synchronisation
+        </button>
+      </div>
+    `;
+  }else{
+    conteneur.innerHTML = `
+      <h1 class="font-display" style="font-size:22px; font-weight:700; margin:0 0 6px 0;">Synchronisation</h1>
+      <p style="font-size:13.5px; color:var(--ink-soft); margin:0 0 22px 0;">Relie plusieurs appareils (ordinateur, tablette, smartphone) pour qu'ils partagent le même projet, mis à jour instantanément.</p>
+
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px,1fr)); gap:16px; max-width:820px;">
+        <div class="card" style="padding:24px;">
+          <i data-lucide="plus-circle" style="width:26px;height:26px; color:var(--primary); margin-bottom:12px;"></i>
+          <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0 0 6px 0;">Créer un code d'équipe</h3>
+          <p style="font-size:13px; color:var(--ink-soft); margin:0 0 16px 0;">À faire une seule fois, sur le premier appareil. Le projet actuel sera partagé.</p>
+          <button class="btn-primary" onclick="creerNouveauCodeSync()"><i data-lucide="refresh-cw" style="width:15px;height:15px;"></i> Générer un code</button>
+        </div>
+        <div class="card" style="padding:24px;">
+          <i data-lucide="log-in" style="width:26px;height:26px; color:var(--primary); margin-bottom:12px;"></i>
+          <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0 0 6px 0;">Rejoindre une équipe</h3>
+          <p style="font-size:13px; color:var(--ink-soft); margin:0 0 16px 0;">Sur les autres appareils, entre le code reçu pour ouvrir le même projet.</p>
+          <div style="display:flex; gap:8px;">
+            <input type="text" id="input-code-sync" class="input-field" maxlength="6" placeholder="EX: A3F9K2" style="text-transform:uppercase; font-family:'IBM Plex Mono',monospace; letter-spacing:.08em;">
+            <button class="btn-secondary" onclick="rejoindreCodeSync(document.getElementById('input-code-sync').value)">Rejoindre</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:18px 22px; margin-top:16px; background:var(--danger-soft); border:none; max-width:820px;">
+        <div style="font-size:13px; color:var(--danger); font-weight:600;">Rejoindre un code remplace le projet actuellement affiché sur cet appareil par celui de l'équipe.</div>
+      </div>
+    `;
+  }
+  rafraichirIcones();
 }
 
 /* =========================================================================
@@ -2216,6 +2546,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   await initialiserPersistance();
+
+  // Synchronisation cloud : reprise automatique si un code était déjà actif
+  initialiserSupabase();
+  reprendreSyncSiExistant();
+
   rendreTout();
 
   if(supportFileSystemAccess() && !fileHandle){
@@ -2224,6 +2559,44 @@ document.addEventListener('DOMContentLoaded', async () => {
   }else if(!supportFileSystemAccess()){
     naviguerVers('fichier');
   }
+});
+
+/* =========================================================================
+   PWA : ENREGISTREMENT DU SERVICE WORKER + BOUTON D'INSTALLATION
+   ========================================================================= */
+if('serviceWorker' in navigator){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js').catch((erreur) => {
+      console.error('Échec de l\'enregistrement du service worker :', erreur);
+    });
+  });
+}
+
+let evenementInstallationDiffere = null;
+
+window.addEventListener('beforeinstallprompt', (evenement) => {
+  // Empêche la mini-bannière automatique du navigateur pour proposer
+  // notre propre bouton, intégré à l'interface.
+  evenement.preventDefault();
+  evenementInstallationDiffere = evenement;
+  const bouton = document.getElementById('install-pwa-btn');
+  if(bouton) bouton.style.display = 'flex';
+});
+
+document.getElementById('install-pwa-btn').addEventListener('click', async () => {
+  if(!evenementInstallationDiffere) return;
+  evenementInstallationDiffere.prompt();
+  const { outcome } = await evenementInstallationDiffere.userChoice;
+  if(outcome === 'accepted'){
+    afficherToast('Application installée avec succès.', 'succes');
+  }
+  evenementInstallationDiffere = null;
+  document.getElementById('install-pwa-btn').style.display = 'none';
+});
+
+window.addEventListener('appinstalled', () => {
+  const bouton = document.getElementById('install-pwa-btn');
+  if(bouton) bouton.style.display = 'none';
 });
 </script>
 
