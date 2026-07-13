@@ -92,6 +92,20 @@
 
   /* Main content */
   .main-area{flex:1; overflow-y:auto; padding:28px 34px 100px 34px;}
+
+  /* --- Mode consultation seule : tout reste visible mais non modifiable --- */
+  .lecture-seule-banner{
+    display:none; align-items:center; gap:10px; background:var(--accent-soft); color:#8a6100;
+    font-size:13px; font-weight:600; padding:10px 16px; border-radius:12px; margin-bottom:18px;
+  }
+  body.mode-lecture-seule .main-area .view-section:not(#view-sync) button,
+  body.mode-lecture-seule .main-area .view-section:not(#view-sync) input,
+  body.mode-lecture-seule .main-area .view-section:not(#view-sync) select,
+  body.mode-lecture-seule .main-area .view-section:not(#view-sync) textarea{
+    pointer-events:none !important;
+    opacity:.45;
+    filter:grayscale(35%);
+  }
   .view-section{display:none; animation:fadeUp .28s ease;}
   .view-section.active{display:block;}
   @keyframes fadeUp{from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:translateY(0);}}
@@ -245,6 +259,11 @@
 
   <main class="main-area" id="main-area">
 
+    <div class="lecture-seule-banner" id="banniere-lecture-seule">
+      <i data-lucide="eye" style="width:16px;height:16px;"></i>
+      <span>Mode consultation seule — les modifications sont désactivées sur cet appareil.</span>
+    </div>
+
     <section class="view-section active" id="view-accueil"></section>
     <section class="view-section" id="view-config"></section>
     <section class="view-section" id="view-taches"></section>
@@ -334,31 +353,42 @@ let editingLaborId = null;
 /* =========================================================================
    SYNCHRONISATION TEMPS RÉEL ENTRE APPAREILS (Supabase)
    =========================================================================
-   PRINCIPE : tous les appareils qui utilisent le même "code d'équipe"
-   partagent la même ligne dans une table Supabase. Dès qu'un appareil
-   modifie le projet, la nouvelle version est envoyée au serveur, qui la
-   redistribue instantanément à tous les autres appareils connectés
-   (via WebSocket — pas besoin de rafraîchir la page).
+   PRINCIPE : chaque équipe a UNE ligne dans Supabase, mais DEUX codes :
+   - un « code modification » (rôle éditeur : peut tout changer)
+   - un « code consultation » (rôle lecture seule : peut seulement regarder)
+   Créer une équipe nécessite le mot de passe administrateur ci-dessous.
 
-   ⚠️ CONFIGURATION REQUISE : remplacez les deux valeurs ci-dessous par
-   celles de votre propre projet Supabase (gratuit) avant de déployer.
-   Voir le guide fourni pour la marche à suivre pas à pas.
+   ⚠️ CONFIGURATION REQUISE avant déploiement :
+   - SUPABASE_URL / SUPABASE_ANON_KEY : vos identifiants Supabase
+   - ADMIN_PASSWORD : un mot de passe de votre choix, à ne communiquer
+     qu'aux personnes autorisées à créer de nouvelles équipes.
+
+   ⚠️ LIMITE DE SÉCURITÉ HONNÊTE : ce mot de passe est vérifié uniquement
+   dans ce fichier (côté navigateur). Il décourage une utilisation
+   accidentelle ou non autorisée par un membre de l'équipe, mais une
+   personne techniquement capable d'inspecter le code de la page pourrait
+   le contourner. Pour une vraie protection à toute épreuve, il faudrait
+   un compte utilisateur par personne — dites-le-moi si vous voulez qu'on
+   mette ça en place plus tard.
    ========================================================================= */
 const SUPABASE_URL = 'https://axihduusjdpxbpzohajd.supabase.co';        // ex : https://xxxxxxxx.supabase.co
 const SUPABASE_ANON_KEY = 'sb_publishable_rr6dnokRb9Lgik33AfAucQ_sKt_FR6o';
+const ADMIN_PASSWORD = '8uym9vhaug5f8j'; // choisissez-en un vous-même
 
 const SYNC_TABLE = 'asbl_projects';
-const SYNC_CODE_KEY = 'asbl_sync_code';
+const SYNC_STORAGE_KEY = 'asbl_sync_v2'; // { projectId, code, role }
 const CLIENT_ID_KEY = 'asbl_client_id';
 
 let supabaseClient = null;
-let syncCode = null;
+let syncProjectId = null;   // identifiant interne de la ligne Supabase
+let syncCode = null;        // le code que CET appareil a utilisé
+let syncRole = null;        // 'editeur' | 'lecture'
+let syncEditCode = null;    // connu seulement si on est éditeur (pour le partager)
+let syncViewCode = null;
 let syncChannel = null;
 let syncPushTimer = null;
-let syncStatus = 'non-configure'; // 'non-configure' | 'deconnecte' | 'connexion' | 'connecte' | 'erreur'
+let syncStatus = 'non-configure';
 
-// Identifiant unique à cet appareil/onglet, pour ignorer nos propres
-// mises à jour quand elles nous reviennent via le temps réel.
 function obtenirIdClient(){
   let id = localStorage.getItem(CLIENT_ID_KEY);
   if(!id){
@@ -376,62 +406,90 @@ function supabaseEstConfigure(){
 
 function initialiserSupabase(){
   if(!supabaseEstConfigure()) { syncStatus = 'non-configure'; return; }
+  syncStatus = 'pret';
   if(supabaseClient) return;
   supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 }
 
 function genererCodeAleatoire(){
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sans caractères ambigus (0/O, 1/I...)
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sans caractères ambigus
   let code = '';
-  for(let i = 0; i < 6; i++){
-    code += alphabet[Math.floor(Math.random() * alphabet.length)];
-  }
+  for(let i = 0; i < 6; i++) code += alphabet[Math.floor(Math.random() * alphabet.length)];
   return code;
 }
 
-/* --- Créer un nouveau code d'équipe et y publier le projet actuel --- */
+function estLectureSeule(){
+  return syncRole === 'lecture';
+}
+
+function appliquerModeLectureSeule(){
+  document.body.classList.toggle('mode-lecture-seule', estLectureSeule());
+  const banniere = document.getElementById('banniere-lecture-seule');
+  if(banniere) banniere.style.display = estLectureSeule() ? 'flex' : 'none';
+}
+
+/* --- Demande le mot de passe admin avant de créer une équipe --- */
+function demanderMotDePasseAdminEtCreer(){
+  const saisie = window.prompt("Mot de passe administrateur requis pour créer une nouvelle équipe :");
+  if(saisie === null) return;
+  if(saisie !== ADMIN_PASSWORD){
+    afficherToast('Mot de passe administrateur incorrect.', 'erreur');
+    return;
+  }
+  creerNouveauCodeSync();
+}
+
+/* --- Créer une nouvelle équipe : génère 2 codes (édition + lecture) --- */
 async function creerNouveauCodeSync(){
   if(!supabaseEstConfigure()){
     afficherToast("La synchronisation n'est pas encore configurée.", 'erreur');
     return;
   }
+  if(!demanderPrenomSiBesoin()) return;
   initialiserSupabase();
-  const nouveauCode = genererCodeAleatoire();
+  const codeEdition = genererCodeAleatoire();
+  const codeLecture = genererCodeAleatoire();
   syncStatus = 'connexion';
   mettreAJourStatutSync();
   try{
-    const { error } = await supabaseClient.from(SYNC_TABLE).insert({
-      id: nouveauCode,
+    const { data: ligne, error } = await supabaseClient.from(SYNC_TABLE).insert({
+      edit_code: codeEdition,
+      view_code: codeLecture,
       data: state,
       updated_at: new Date().toISOString(),
       updated_by: idClientActuel
-    });
+    }).select().single();
     if(error) throw error;
-    syncCode = nouveauCode;
-    localStorage.setItem(SYNC_CODE_KEY, syncCode);
+
+    syncProjectId = ligne.id;
+    syncCode = codeEdition;
+    syncRole = 'editeur';
+    syncEditCode = codeEdition;
+    syncViewCode = codeLecture;
+    sauvegarderSyncLocalement();
     souscrireAuTempsReel();
     syncStatus = 'connecte';
-    afficherToast('Code d\'équipe créé : ' + syncCode, 'succes');
+    enregistrerAction('a créé une nouvelle équipe synchronisée');
+    afficherToast('Équipe créée avec succès.', 'succes');
   }catch(erreur){
     console.error(erreur);
     syncStatus = 'erreur';
-    afficherToast("Impossible de créer le code de synchronisation.", 'erreur');
+    afficherToast("Impossible de créer l'équipe. Vérifie la configuration Supabase.", 'erreur');
   }
+  appliquerModeLectureSeule();
   mettreAJourStatutSync();
   if(currentView === 'sync') rendreSync();
 }
 
-/* --- Rejoindre un code d'équipe existant : on récupère la dernière version --- */
+/* --- Rejoindre une équipe avec un code (édition OU lecture) --- */
 async function rejoindreCodeSync(code){
   const codePropre = (code || '').trim().toUpperCase();
-  if(!codePropre){
-    afficherToast('Entre un code d\'équipe valide.', 'erreur');
-    return;
-  }
+  if(!codePropre){ afficherToast('Entre un code valide.', 'erreur'); return; }
   if(!supabaseEstConfigure()){
     afficherToast("La synchronisation n'est pas encore configurée.", 'erreur');
     return;
   }
+  if(!demanderPrenomSiBesoin()) return;
   initialiserSupabase();
   syncStatus = 'connexion';
   mettreAJourStatutSync();
@@ -439,7 +497,7 @@ async function rejoindreCodeSync(code){
     const { data: ligne, error } = await supabaseClient
       .from(SYNC_TABLE)
       .select('*')
-      .eq('id', codePropre)
+      .or('edit_code.eq.' + codePropre + ',view_code.eq.' + codePropre)
       .maybeSingle();
     if(error) throw error;
     if(!ligne){
@@ -449,11 +507,18 @@ async function rejoindreCodeSync(code){
       return;
     }
     state = fusionnerAvecEtatVide(ligne.data);
+    syncProjectId = ligne.id;
     syncCode = codePropre;
-    localStorage.setItem(SYNC_CODE_KEY, syncCode);
+    syncRole = (ligne.edit_code === codePropre) ? 'editeur' : 'lecture';
+    syncEditCode = (syncRole === 'editeur') ? ligne.edit_code : null;
+    syncViewCode = ligne.view_code;
+    sauvegarderSyncLocalement();
     souscrireAuTempsReel();
     syncStatus = 'connecte';
-    afficherToast('Connecté à l\'équipe ' + syncCode + '.', 'succes');
+    afficherToast(
+      syncRole === 'editeur' ? 'Connecté en modification.' : 'Connecté en consultation seule.',
+      'succes'
+    );
     naviguerVers('accueil');
     rendreTout();
   }catch(erreur){
@@ -461,32 +526,40 @@ async function rejoindreCodeSync(code){
     syncStatus = 'erreur';
     afficherToast("Impossible de rejoindre ce code.", 'erreur');
   }
+  appliquerModeLectureSeule();
   mettreAJourStatutSync();
   if(currentView === 'sync') rendreSync();
 }
 
-/* --- Se déconnecter du code d'équipe (reste en local uniquement) --- */
+function sauvegarderSyncLocalement(){
+  try{
+    localStorage.setItem(SYNC_STORAGE_KEY, JSON.stringify({
+      projectId: syncProjectId, code: syncCode, role: syncRole,
+      editCode: syncEditCode, viewCode: syncViewCode
+    }));
+  }catch(e){}
+}
+
 function quitterSync(){
   if(syncChannel){ supabaseClient.removeChannel(syncChannel); syncChannel = null; }
-  syncCode = null;
-  localStorage.removeItem(SYNC_CODE_KEY);
+  syncProjectId = null; syncCode = null; syncRole = null; syncEditCode = null; syncViewCode = null;
+  localStorage.removeItem(SYNC_STORAGE_KEY);
   syncStatus = 'deconnecte';
+  appliquerModeLectureSeule();
   mettreAJourStatutSync();
   afficherToast('Synchronisation désactivée sur cet appareil.', 'info');
   if(currentView === 'sync') rendreSync();
 }
 
-/* --- Écoute en temps réel des changements envoyés par les AUTRES appareils --- */
 function souscrireAuTempsReel(){
-  if(!supabaseClient || !syncCode) return;
+  if(!supabaseClient || !syncProjectId) return;
   if(syncChannel) supabaseClient.removeChannel(syncChannel);
 
   syncChannel = supabaseClient
-    .channel('sync-' + syncCode)
+    .channel('sync-' + syncProjectId)
     .on('postgres_changes',
-      { event: 'UPDATE', schema: 'public', table: SYNC_TABLE, filter: 'id=eq.' + syncCode },
+      { event: 'UPDATE', schema: 'public', table: SYNC_TABLE, filter: 'id=eq.' + syncProjectId },
       (payload) => {
-        // On ignore nos propres écritures (déjà appliquées localement)
         if(payload.new.updated_by === idClientActuel) return;
         state = fusionnerAvecEtatVide(payload.new.data);
         rendreTout();
@@ -500,9 +573,10 @@ function souscrireAuTempsReel(){
     });
 }
 
-/* --- Envoi (avec anti-rebond) de l'état local vers le serveur --- */
+/* --- Envoi vers le cloud : jamais si on est en lecture seule --- */
 function planifierEnvoiCloud(){
-  if(!syncCode || !supabaseClient) return;
+  if(!syncProjectId || !supabaseClient) return;
+  if(estLectureSeule()) return; // sécurité côté client : un lecteur n'écrit jamais
   clearTimeout(syncPushTimer);
   syncPushTimer = setTimeout(async () => {
     try{
@@ -510,7 +584,7 @@ function planifierEnvoiCloud(){
         data: state,
         updated_at: new Date().toISOString(),
         updated_by: idClientActuel
-      }).eq('id', syncCode);
+      }).eq('id', syncProjectId);
       if(error) throw error;
       syncStatus = 'connecte';
     }catch(erreur){
@@ -521,14 +595,19 @@ function planifierEnvoiCloud(){
   }, 700);
 }
 
-/* --- Reprise automatique de la synchronisation au chargement de la page --- */
 function reprendreSyncSiExistant(){
   if(!supabaseEstConfigure()) return;
-  const codeEnregistre = localStorage.getItem(SYNC_CODE_KEY);
-  if(!codeEnregistre) return;
+  let sauvegarde = null;
+  try{ sauvegarde = JSON.parse(localStorage.getItem(SYNC_STORAGE_KEY) || 'null'); }catch(e){}
+  if(!sauvegarde || !sauvegarde.projectId) return;
   initialiserSupabase();
-  syncCode = codeEnregistre;
+  syncProjectId = sauvegarde.projectId;
+  syncCode = sauvegarde.code;
+  syncRole = sauvegarde.role;
+  syncEditCode = sauvegarde.editCode || null;
+  syncViewCode = sauvegarde.viewCode || null;
   syncStatus = 'connexion';
+  appliquerModeLectureSeule();
   souscrireAuTempsReel();
 }
 
@@ -536,11 +615,13 @@ function mettreAJourStatutSync(){
   const pastille = document.getElementById('sync-status-dot');
   const texte = document.getElementById('sync-status-text');
   if(!pastille || !texte) return;
+  const libelleRole = syncRole === 'editeur' ? ' (modification)' : syncRole === 'lecture' ? ' (lecture seule)' : '';
   const couleurs = {
     'non-configure': ['var(--ink-soft)', 'Synchronisation non configurée'],
+    'pret': ['var(--accent)', 'Prêt — crée ou rejoins une équipe'],
     'deconnecte': ['var(--ink-soft)', 'Synchronisation désactivée'],
     'connexion': ['var(--accent)', 'Connexion en cours…'],
-    'connecte': ['var(--success)', 'Synchronisé — équipe ' + (syncCode || '')],
+    'connecte': ['var(--success)', 'Synchronisé' + libelleRole],
     'erreur': ['var(--danger)', 'Erreur de synchronisation']
   };
   const [couleur, libelle] = couleurs[syncStatus] || couleurs['non-configure'];
@@ -870,6 +951,37 @@ async function ecrireEtatDansFichier(){
     afficherToast("La sauvegarde automatique a échoué. Vérifie l'accès au fichier.", 'erreur');
     return false;
   }
+}
+
+/* =========================================================================
+   JOURNAL D'ACTIVITÉ — « qui a fait quoi, et quand »
+   ========================================================================= */
+const PRENOM_KEY = 'asbl_prenom_utilisateur';
+let prenomUtilisateur = localStorage.getItem(PRENOM_KEY) || null;
+
+function demanderPrenomSiBesoin(){
+  if(prenomUtilisateur) return prenomUtilisateur;
+  let saisie = '';
+  while(!saisie){
+    saisie = (window.prompt("Quel est ton prénom ? (affiché dans le journal d'activité de l'équipe)") || '').trim();
+    if(saisie === null) return null;
+  }
+  prenomUtilisateur = saisie;
+  localStorage.setItem(PRENOM_KEY, prenomUtilisateur);
+  return prenomUtilisateur;
+}
+
+function enregistrerAction(description){
+  if(!state.meta.journal) state.meta.journal = [];
+  state.meta.journal.unshift({
+    auteur: prenomUtilisateur || 'Inconnu',
+    action: description,
+    date: new Date().toISOString()
+  });
+  // On garde un historique raisonnable (200 dernières actions) pour ne pas
+  // faire grossir le projet indéfiniment.
+  if(state.meta.journal.length > 200) state.meta.journal.length = 200;
+  planifierSauvegarde();
 }
 
 function planifierSauvegarde(){
@@ -1467,7 +1579,7 @@ function enregistrerFicheProjet(){
   state.project.description = document.getElementById('cfg-desc').value;
   state.project.objectives = document.getElementById('cfg-objectifs').value;
   const nbTachesAjoutees = genererTachesDepuisObjectifs();
-  planifierSauvegarde();
+  enregistrerAction('a mis à jour les informations du projet');
   mettreAJourStatutFichier();
   rendreTaches();
   rendreAccueil();
@@ -1537,13 +1649,15 @@ function enregistrerMembre(){
       membre.name = nom; membre.role = poste; membre.type = type; membre.hourlyRate = taux;
     }
     afficherToast('Membre modifié.', 'succes');
+    editingMemberId = null;
+    enregistrerAction('a modifié la fiche de ' + nom);
   }else{
     state.team.push({ id: genererId(), name: nom, role: poste, type, hourlyRate: taux });
     afficherToast('Membre ajouté à l\'équipe.', 'succes');
+    editingMemberId = null;
+    enregistrerAction('a ajouté ' + nom + ' à l\'équipe');
   }
 
-  editingMemberId = null;
-  planifierSauvegarde();
   fermerModal();
   rendreConfig();
   rendreTaches();
@@ -1556,8 +1670,10 @@ function supprimerMembre(id){
     afficherToast('Ce membre est assigné à des tâches. Réassigne-les avant de le supprimer.', 'erreur');
     return;
   }
+  const membre = trouverMembre(id);
+  const nomMembre = membre ? membre.name : 'un membre';
   state.team = state.team.filter(m => m.id !== id);
-  planifierSauvegarde();
+  enregistrerAction('a retiré ' + nomMembre + ' de l\'équipe');
   rendreConfig();
   afficherToast('Membre supprimé.', 'info');
 }
@@ -1720,12 +1836,14 @@ function enregistrerTache(){
       tache.label = label; tache.assigneeId = assigneeId; tache.estimatedHours = heures; tache.deadline = deadline; tache.status = statut;
     }
     afficherToast('Tâche modifiée.', 'succes');
+    editingTaskId = null;
+    enregistrerAction('a modifié la tâche « ' + label + ' »');
   }else{
     state.tasks.push({ id: genererId(), label, assigneeId, estimatedHours: heures, deadline, status: statut });
     afficherToast('Tâche ajoutée.', 'succes');
+    editingTaskId = null;
+    enregistrerAction('a ajouté la tâche « ' + label + ' »');
   }
-  editingTaskId = null;
-  planifierSauvegarde();
   fermerModal();
   rendreTaches();
   rendreAccueil();
@@ -1736,15 +1854,17 @@ function changerStatutTache(id, nouveauStatut){
   const tache = state.tasks.find(t => t.id === id);
   if(!tache) return;
   tache.status = nouveauStatut;
-  planifierSauvegarde();
+  enregistrerAction('a changé le statut de « ' + tache.label + ' » en ' + nouveauStatut);
   rendreTaches();
   rendreAccueil();
   afficherToast('Statut mis à jour.', 'info');
 }
 
 function supprimerTache(id){
+  const tache = state.tasks.find(t => t.id === id);
+  const libelle = tache ? tache.label : 'une tâche';
   state.tasks = state.tasks.filter(t => t.id !== id);
-  planifierSauvegarde();
+  enregistrerAction('a supprimé la tâche « ' + libelle + ' »');
   rendreTaches();
   rendreAccueil();
   rendreBudget();
@@ -2070,12 +2190,14 @@ function enregistrerSession(){
     const session = trouverSession(editingSessionId);
     if(session){ session.date = date; session.label = label; session.hours = heures; }
     afficherToast('Session modifiée.', 'succes');
+    editingSessionId = null;
+    enregistrerAction('a modifié une session d\'exécution (' + date + ')');
   }else{
     state.executionSessions.push({ id: genererId(), date, label, hours: heures });
     afficherToast('Session ajoutée.', 'succes');
+    editingSessionId = null;
+    enregistrerAction('a ajouté une session d\'exécution (' + date + ')');
   }
-  editingSessionId = null;
-  planifierSauvegarde();
   fermerModal();
   rendreBudget();
   rendreAccueil();
@@ -2088,7 +2210,7 @@ function supprimerSession(id){
     return;
   }
   state.executionSessions = state.executionSessions.filter(s => s.id !== id);
-  planifierSauvegarde();
+  enregistrerAction('a supprimé une session d\'exécution');
   rendreBudget();
   rendreAccueil();
   afficherToast('Session supprimée.', 'info');
@@ -2169,20 +2291,24 @@ function enregistrerDepense(){
     const depense = state.expenses.find(d => d.id === editingExpenseId);
     if(depense){ depense.label = label; depense.mode = mode; depense.amount = montant; }
     afficherToast('Coût modifié.', 'succes');
+    editingExpenseId = null;
+    enregistrerAction('a modifié le coût « ' + label + ' » (' + formaterMontant(montant) + ')');
   }else{
     state.expenses.push({ id: genererId(), label, mode, amount: montant });
     afficherToast('Coût ajouté.', 'succes');
+    editingExpenseId = null;
+    enregistrerAction('a ajouté le coût « ' + label + ' » (' + formaterMontant(montant) + ')');
   }
-  editingExpenseId = null;
-  planifierSauvegarde();
   fermerModal();
   rendreBudget();
   rendreAccueil();
 }
 
 function supprimerDepense(id){
+  const depense = state.expenses.find(d => d.id === id);
+  const libelle = depense ? depense.label : 'un coût';
   state.expenses = state.expenses.filter(d => d.id !== id);
-  planifierSauvegarde();
+  enregistrerAction('a supprimé le coût « ' + libelle + ' »');
   rendreBudget();
   rendreAccueil();
   afficherToast('Coût supprimé.', 'info');
@@ -2236,12 +2362,14 @@ function enregistrerMainOeuvrePrep(){
     const entree = state.labor.find(e => e.id === editingLaborId);
     if(entree){ entree.memberId = memberId; entree.joursPreparation = joursPreparation; entree.heuresParJour = heuresParJour; }
     afficherToast('Heures de préparation modifiées.', 'succes');
+    editingLaborId = null;
+    enregistrerAction('a modifié des heures de préparation pour ' + (trouverMembre(memberId) ? trouverMembre(memberId).name : 'un membre'));
   }else{
     state.labor.push({ id: genererId(), memberId, phase: 'preparation', joursPreparation, heuresParJour });
     afficherToast('Heures de préparation ajoutées.', 'succes');
+    editingLaborId = null;
+    enregistrerAction('a ajouté des heures de préparation pour ' + (trouverMembre(memberId) ? trouverMembre(memberId).name : 'un membre'));
   }
-  editingLaborId = null;
-  planifierSauvegarde();
   fermerModal();
   rendreBudget();
   rendreAccueil();
@@ -2294,12 +2422,14 @@ function enregistrerMainOeuvreExec(){
     const entree = state.labor.find(e => e.id === editingLaborId);
     if(entree){ entree.memberId = memberId; entree.sessionId = sessionId; entree.heures = heures; }
     afficherToast('Heures d\'exécution modifiées.', 'succes');
+    editingLaborId = null;
+    enregistrerAction('a modifié des heures d\'exécution pour ' + (trouverMembre(memberId) ? trouverMembre(memberId).name : 'un membre'));
   }else{
     state.labor.push({ id: genererId(), memberId, phase: 'execution', sessionId, heures });
     afficherToast('Heures d\'exécution ajoutées.', 'succes');
+    editingLaborId = null;
+    enregistrerAction('a ajouté des heures d\'exécution pour ' + (trouverMembre(memberId) ? trouverMembre(memberId).name : 'un membre'));
   }
-  editingLaborId = null;
-  planifierSauvegarde();
   fermerModal();
   rendreBudget();
   rendreAccueil();
@@ -2307,7 +2437,7 @@ function enregistrerMainOeuvreExec(){
 
 function supprimerMainOeuvre(id){
   state.labor = state.labor.filter(e => e.id !== id);
-  planifierSauvegarde();
+  enregistrerAction('a supprimé une entrée de main d\'œuvre');
   rendreBudget();
   rendreAccueil();
   afficherToast('Entrée supprimée.', 'info');
@@ -2490,27 +2620,61 @@ function rendreSync(){
     return;
   }
 
-  if(syncCode){
+  if(syncProjectId){
+    const estEditeur = syncRole === 'editeur';
+    const journal = (state.meta.journal || []).slice(0, 15);
+    const journalHtml = journal.length === 0
+      ? `<p style="font-size:12.5px; color:var(--ink-soft); margin:0;">Aucune activité enregistrée pour l'instant.</p>`
+      : journal.map(entree => `
+          <div style="display:flex; justify-content:space-between; gap:10px; padding:9px 0; border-bottom:1px solid var(--border); font-size:12.5px;">
+            <div><strong>${echapperHtml(entree.auteur)}</strong> ${echapperHtml(entree.action)}</div>
+            <div style="color:var(--ink-soft); white-space:nowrap;">${formaterDate(entree.date)} ${formaterHeure(new Date(entree.date))}</div>
+          </div>
+        `).join('');
+
     conteneur.innerHTML = `
       <h1 class="font-display" style="font-size:22px; font-weight:700; margin:0 0 6px 0;">Synchronisation</h1>
-      <p style="font-size:13.5px; color:var(--ink-soft); margin:0 0 22px 0;">Ce projet est synchronisé en temps réel avec tous les appareils utilisant le même code d'équipe.</p>
+      <p style="font-size:13.5px; color:var(--ink-soft); margin:0 0 22px 0;">Ce projet est synchronisé en temps réel avec tous les appareils connectés à la même équipe.</p>
 
-      <div class="card" style="padding:24px; max-width:480px;">
-        <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
-          <span class="file-status-dot" id="sync-status-dot-view" style="background:var(--success); position:relative; top:0;"></span>
-          <span style="font-weight:700; font-size:14px;" id="sync-status-text-view">Synchronisé</span>
-        </div>
-        <div class="field-label">Code d'équipe</div>
-        <div style="display:flex; align-items:center; gap:10px; margin-bottom:18px;">
-          <div style="font-family:'IBM Plex Mono',monospace; font-size:22px; font-weight:700; letter-spacing:.08em; background:var(--surface-2); padding:10px 16px; border-radius:10px;">${echapperHtml(syncCode)}</div>
-          <button class="btn-secondary" onclick="navigator.clipboard.writeText('${syncCode}'); afficherToast('Code copié.', 'succes');">
-            <i data-lucide="copy" style="width:14px;height:14px;"></i> Copier
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(300px,1fr)); gap:16px; max-width:900px;">
+        <div class="card" style="padding:24px;">
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+            <span class="file-status-dot" id="sync-status-dot-view" style="background:var(--success); position:relative; top:0;"></span>
+            <span style="font-weight:700; font-size:14px;" id="sync-status-text-view">Synchronisé</span>
+          </div>
+
+          <div class="badge" style="background:${estEditeur ? 'var(--primary-soft)' : 'var(--accent-soft)'}; color:${estEditeur ? 'var(--primary-dark)' : '#8a6100'}; margin-bottom:16px; display:inline-block;">
+            ${estEditeur ? 'Rôle : modification' : 'Rôle : consultation seule'}
+          </div>
+
+          ${estEditeur ? `
+            <div class="field-label">Code de modification (à donner à ceux qui doivent modifier)</div>
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom:14px;">
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:18px; font-weight:700; letter-spacing:.06em; background:var(--surface-2); padding:8px 14px; border-radius:10px;">${echapperHtml(syncEditCode || '')}</div>
+              <button class="btn-secondary" onclick="navigator.clipboard.writeText('${syncEditCode}'); afficherToast('Code copié.', 'succes');">
+                <i data-lucide="copy" style="width:14px;height:14px;"></i>
+              </button>
+            </div>
+            <div class="field-label">Code de consultation seule (à donner à ceux qui doivent juste regarder)</div>
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom:18px;">
+              <div style="font-family:'IBM Plex Mono',monospace; font-size:18px; font-weight:700; letter-spacing:.06em; background:var(--surface-2); padding:8px 14px; border-radius:10px;">${echapperHtml(syncViewCode || '')}</div>
+              <button class="btn-secondary" onclick="navigator.clipboard.writeText('${syncViewCode}'); afficherToast('Code copié.', 'succes');">
+                <i data-lucide="copy" style="width:14px;height:14px;"></i>
+              </button>
+            </div>
+          ` : `
+            <p style="font-size:13px; color:var(--ink-soft); margin:0 0 16px 0;">Tu consultes ce projet en lecture seule — les modifications sont désactivées sur cet appareil.</p>
+          `}
+
+          <button class="btn-secondary" onclick="quitterSync()" style="color:var(--danger); border-color:var(--danger-soft);">
+            <i data-lucide="unlink" style="width:14px;height:14px;"></i> Désactiver la synchronisation
           </button>
         </div>
-        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 16px 0;">Communique ce code aux autres membres de l'équipe pour qu'ils voient et modifient le même projet en direct.</p>
-        <button class="btn-secondary" onclick="quitterSync()" style="color:var(--danger); border-color:var(--danger-soft);">
-          <i data-lucide="unlink" style="width:14px;height:14px;"></i> Désactiver la synchronisation
-        </button>
+
+        <div class="card" style="padding:24px;">
+          <h3 class="font-display" style="font-size:14.5px; font-weight:700; margin:0 0 12px 0;">Journal d'activité récent</h3>
+          ${journalHtml}
+        </div>
       </div>
     `;
   }else{
@@ -2520,15 +2684,15 @@ function rendreSync(){
 
       <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px,1fr)); gap:16px; max-width:820px;">
         <div class="card" style="padding:24px;">
-          <i data-lucide="plus-circle" style="width:26px;height:26px; color:var(--primary); margin-bottom:12px;"></i>
-          <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0 0 6px 0;">Créer un code d'équipe</h3>
-          <p style="font-size:13px; color:var(--ink-soft); margin:0 0 16px 0;">À faire une seule fois, sur le premier appareil. Le projet actuel sera partagé.</p>
-          <button class="btn-primary" onclick="creerNouveauCodeSync()"><i data-lucide="refresh-cw" style="width:15px;height:15px;"></i> Générer un code</button>
+          <i data-lucide="shield" style="width:26px;height:26px; color:var(--primary); margin-bottom:12px;"></i>
+          <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0 0 6px 0;">Créer une équipe (administrateur)</h3>
+          <p style="font-size:13px; color:var(--ink-soft); margin:0 0 16px 0;">Réservé à l'administrateur — un mot de passe sera demandé. Génère deux codes : un pour modifier, un pour consulter seulement.</p>
+          <button class="btn-primary" onclick="demanderMotDePasseAdminEtCreer()"><i data-lucide="refresh-cw" style="width:15px;height:15px;"></i> Créer l'équipe</button>
         </div>
         <div class="card" style="padding:24px;">
           <i data-lucide="log-in" style="width:26px;height:26px; color:var(--primary); margin-bottom:12px;"></i>
           <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0 0 6px 0;">Rejoindre une équipe</h3>
-          <p style="font-size:13px; color:var(--ink-soft); margin:0 0 16px 0;">Sur les autres appareils, entre le code reçu pour ouvrir le même projet.</p>
+          <p style="font-size:13px; color:var(--ink-soft); margin:0 0 16px 0;">Entre le code reçu (modification ou consultation) pour ouvrir le même projet.</p>
           <div style="display:flex; gap:8px;">
             <input type="text" id="input-code-sync" class="input-field" maxlength="6" placeholder="EX: A3F9K2" style="text-transform:uppercase; font-family:'IBM Plex Mono',monospace; letter-spacing:.08em;">
             <button class="btn-secondary" onclick="rejoindreCodeSync(document.getElementById('input-code-sync').value)">Rejoindre</button>
@@ -2559,18 +2723,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   await initialiserPersistance();
 
-  // Synchronisation cloud : reprise automatique si un code était déjà actif
+  // Synchronisation cloud : reprise automatique si une équipe était déjà active
   initialiserSupabase();
   reprendreSyncSiExistant();
+  appliquerModeLectureSeule();
 
   rendreTout();
 
   // On ne force plus la création d'un fichier local : l'application
   // fonctionne désormais très bien uniquement via la synchronisation cloud.
   // On oriente juste doucement les nouveaux utilisateurs, sans les bloquer.
-  if(!fileHandle && !syncCode){
+  if(!fileHandle && !syncProjectId){
     naviguerVers('sync');
-    afficherToast("Crée un code d'équipe (onglet Synchronisation) pour commencer, ou ouvre un fichier local si tu préfères.", 'info');
+    afficherToast("Crée ou rejoins une équipe (onglet Synchronisation) pour commencer, ou ouvre un fichier local si tu préfères.", 'info');
   }
 });
 
