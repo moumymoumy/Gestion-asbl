@@ -7,7 +7,7 @@
    réseau pour garantir des données à jour.
    ========================================================================== */
 
-const CACHE_NAME = 'gestion-asbl-cache-v1';
+const CACHE_NAME = 'gestion-asbl-cache-v2'; // v2 : force la purge de l'ancienne version mise en cache
 
 const APP_SHELL = [
   './',
