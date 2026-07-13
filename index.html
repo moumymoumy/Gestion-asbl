@@ -875,12 +875,16 @@ async function ecrireEtatDansFichier(){
 function planifierSauvegarde(){
   state.meta.lastModified = new Date().toISOString();
 
+  // Filet de sécurité universel : on garde toujours une copie locale sur
+  // cet appareil, que l'utilisateur utilise un fichier physique, le cloud,
+  // les deux, ou ni l'un ni l'autre pour l'instant.
+  try{ localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(state)); }catch(e){}
+
   // Synchronisation cloud : envoyée à chaque modification, indépendamment
   // du mode de sauvegarde locale (fichier physique ou cache mobile).
   planifierEnvoiCloud();
 
   if(isMobileFileMode){
-    try{ localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(state)); }catch(e){}
     mettreAJourStatutFichier();
     return;
   }
@@ -1002,11 +1006,11 @@ function mettreAJourStatutFichier(){
     if(isMobileFileMode){
       texteEl.textContent = 'Mode mobile — cache local actif';
       point.style.background = 'var(--accent)';
-      sousTexteEl.textContent = heureMaj ? ('Sauvegardé en cache à ' + formaterHeure(heureMaj) + ' · pense à exporter') : 'Pense à exporter régulièrement';
+      sousTexteEl.textContent = heureMaj ? ('Sauvegardé en cache à ' + formaterHeure(heureMaj)) : 'Utilise la Synchronisation pour lier tes appareils';
     }else{
-      texteEl.textContent = 'Aucun fichier importé';
-      point.style.background = 'var(--danger)';
-      sousTexteEl.textContent = 'Importe un fichier JSON pour commencer';
+      texteEl.textContent = 'Fichier local (optionnel)';
+      point.style.background = 'var(--ink-soft)';
+      sousTexteEl.textContent = 'Voir l\'onglet Synchronisation';
     }
     return;
   }
@@ -1016,9 +1020,9 @@ function mettreAJourStatutFichier(){
     point.style.background = 'var(--success)';
     sousTexteEl.textContent = heureMaj ? ('Sauvegardé à ' + formaterHeure(heureMaj)) : 'Sauvegarde automatique active';
   }else{
-    texteEl.textContent = 'Aucun fichier connecté';
-    point.style.background = 'var(--danger)';
-    sousTexteEl.textContent = "Rends-toi dans l'onglet Fichier projet";
+    texteEl.textContent = 'Fichier local (optionnel)';
+    point.style.background = 'var(--ink-soft)';
+    sousTexteEl.textContent = 'Non utilisé — voir l\'onglet Synchronisation';
   }
   document.getElementById('sidebar-project-name').textContent = state.project.name || 'Mon ASBL';
 }
@@ -1040,6 +1044,14 @@ async function initialiserPersistance(){
           console.warn('Handle enregistré invalide, reconnexion nécessaire.', erreur);
         }
       }
+    }
+    // Pas de fichier physique connecté : on retombe sur la dernière copie
+    // locale connue de cet appareil, plutôt que de repartir d'un projet vide.
+    if(!fileHandle){
+      try{
+        const cache = localStorage.getItem(LOCAL_CACHE_KEY);
+        if(cache) state = fusionnerAvecEtatVide(JSON.parse(cache));
+      }catch(e){}
     }
   }else{
     try{
@@ -2354,8 +2366,8 @@ function rendreFichier(){
           </div>
         </div>
       ` : `
-        <div class="card" style="padding:18px 22px; background:var(--danger-soft); border:none;">
-          <div style="font-size:13.5px; color:var(--danger); font-weight:600;">Aucun fichier connecté actuellement — les modifications ne seront pas sauvegardées tant qu'un fichier n'est pas créé ou ouvert.</div>
+        <div class="card" style="padding:18px 22px; background:var(--accent-soft); border:none;">
+          <div style="font-size:13.5px; color:#8a6100; font-weight:600;">Aucun fichier local connecté — ce n'est pas obligatoire. Si tu utilises l'onglet Synchronisation, tes données sont déjà sauvegardées dans le cloud sans avoir besoin de fichier.</div>
         </div>
       `}
     `;
@@ -2553,11 +2565,12 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   rendreTout();
 
-  if(supportFileSystemAccess() && !fileHandle){
-    naviguerVers('fichier');
-    afficherToast("Crée ou ouvre un fichier de projet pour commencer.", 'info');
-  }else if(!supportFileSystemAccess()){
-    naviguerVers('fichier');
+  // On ne force plus la création d'un fichier local : l'application
+  // fonctionne désormais très bien uniquement via la synchronisation cloud.
+  // On oriente juste doucement les nouveaux utilisateurs, sans les bloquer.
+  if(!fileHandle && !syncCode){
+    naviguerVers('sync');
+    afficherToast("Crée un code d'équipe (onglet Synchronisation) pour commencer, ou ouvre un fichier local si tu préfères.", 'info');
   }
 });
 
