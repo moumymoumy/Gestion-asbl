@@ -1572,14 +1572,36 @@ function genererTachesDepuisObjectifs(){
 }
 
 function enregistrerFicheProjet(){
+  // On garde une copie de l'état précédent pour savoir exactement ce qui change
+  const ancien = {
+    name: state.project.name,
+    status: state.project.status,
+    startDate: state.project.startDate,
+    endDate: state.project.endDate,
+    description: state.project.description,
+    objectives: state.project.objectives
+  };
+
   state.project.name = document.getElementById('cfg-name').value.trim() || 'Mon projet ASBL';
   state.project.status = document.getElementById('cfg-status').value;
   state.project.startDate = document.getElementById('cfg-start').value;
   state.project.endDate = document.getElementById('cfg-end').value;
   state.project.description = document.getElementById('cfg-desc').value;
   state.project.objectives = document.getElementById('cfg-objectifs').value;
+
+  const champsModifies = [];
+  if(ancien.name !== state.project.name) champsModifies.push('le nom (« ' + state.project.name + ' »)');
+  if(ancien.status !== state.project.status) champsModifies.push('le statut (' + state.project.status + ')');
+  if(ancien.startDate !== state.project.startDate) champsModifies.push('la date de début');
+  if(ancien.endDate !== state.project.endDate) champsModifies.push('la date de fin');
+  if(ancien.description !== state.project.description) champsModifies.push('la description');
+  if(ancien.objectives !== state.project.objectives) champsModifies.push('les objectifs');
+
   const nbTachesAjoutees = genererTachesDepuisObjectifs();
-  enregistrerAction('a mis à jour les informations du projet');
+  const descriptionAction = champsModifies.length > 0
+    ? 'a modifié ' + champsModifies.join(', ')
+    : 'a enregistré la fiche projet (aucun changement)';
+  enregistrerAction(descriptionAction);
   mettreAJourStatutFichier();
   rendreTaches();
   rendreAccueil();
