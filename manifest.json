@@ -1,0 +1,25 @@
+{
+  "name": "Gestion ASBL — Tableau de bord",
+  "short_name": "Gestion ASBL",
+  "description": "Tableau de bord de gestion pour projet associatif : équipe, tâches, budget et simulateur.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F6F7F5",
+  "theme_color": "#0F5257",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
