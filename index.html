@@ -125,6 +125,11 @@
   }
   .btn-secondary:hover{background:var(--surface-2);}
   .btn-secondary:active{transform:scale(0.97);}
+  .btn-primary:disabled, .btn-secondary:disabled{
+    opacity:.4; cursor:not-allowed; pointer-events:auto;
+  }
+  .btn-primary:disabled:hover{background:var(--primary); transform:none;}
+  .btn-secondary:disabled:hover{background:var(--surface); transform:none;}
   .btn-danger-ghost{
     color:var(--danger); background:transparent; border:none; cursor:pointer;
     padding:6px; border-radius:8px; transition:background .15s ease;
@@ -325,8 +330,10 @@ function creerEtatVide(){
     team: [],
     tasks: [],
     expenses: [],
+    revenues: [],
     executionSessions: [],
     labor: [],
+    labelPricing: {},
     simulator: {
       participants: 50,
       ticketPrice: 20
@@ -347,6 +354,7 @@ let profitChartInstance = null;
 let editingTaskId = null;
 let editingMemberId = null;
 let editingExpenseId = null;
+let editingRevenueId = null;
 let editingSessionId = null;
 let editingLaborId = null;
 
@@ -1020,8 +1028,10 @@ function fusionnerAvecEtatVide(donnees){
     team: Array.isArray(donnees.team) ? donnees.team : [],
     tasks: Array.isArray(donnees.tasks) ? donnees.tasks : [],
     expenses: Array.isArray(donnees.expenses) ? donnees.expenses : [],
+    revenues: Array.isArray(donnees.revenues) ? donnees.revenues : [],
     executionSessions: Array.isArray(donnees.executionSessions) ? donnees.executionSessions : [],
     labor: Array.isArray(donnees.labor) ? donnees.labor : [],
+    labelPricing: (donnees.labelPricing && typeof donnees.labelPricing === 'object' && !Array.isArray(donnees.labelPricing)) ? donnees.labelPricing : {},
     simulator: Object.assign({}, base.simulator, donnees.simulator || {}),
     meta: Object.assign({}, base.meta, donnees.meta || {})
   };
@@ -1304,6 +1314,89 @@ function calculerHeuresExecutionTotal(){
   return state.executionSessions.reduce((somme, s) => somme + (Number(s.hours) || 0), 0);
 }
 
+/* --- Plage horaire : calcule une durée en heures à partir d'un début et d'une fin (HH:MM) ---
+   Si la fin est avant (ou égale à) le début, on considère que la session traverse minuit. */
+function calculerDureeDepuisPlage(debut, fin){
+  if(!debut || !fin) return 0;
+  const [hD, mD] = debut.split(':').map(Number);
+  const [hF, mF] = fin.split(':').map(Number);
+  if([hD,mD,hF,mF].some(v => Number.isNaN(v))) return 0;
+  let minutesDebut = hD * 60 + mD;
+  let minutesFin = hF * 60 + mF;
+  if(minutesFin <= minutesDebut) minutesFin += 24 * 60; // passage de minuit
+  return Math.round(((minutesFin - minutesDebut) / 60) * 100) / 100;
+}
+
+/* --- Regroupe les sessions d'exécution par libellé et additionne leurs heures --- */
+/* --- Normalise un libellé pour le regroupement : ignore majuscules, accents, espaces
+   en trop et un "s" final par mot (singulier/pluriel) — mais ne fusionne jamais deux
+   mots réellement différents (ex. "Concert chœur" reste distinct de "Répétitions chœur"). --- */
+function normaliserLibelle(label){
+  if(!label) return '';
+  return label
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // enlève les accents
+    .replace(/œ/gi, 'oe').replace(/æ/gi, 'ae')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .split(' ')
+    .map(mot => mot.replace(/s$/, ''))
+    .join(' ');
+}
+
+function calculerTotauxParLibelle(){
+  const groupes = {};
+  // Parcours dans l'ordre d'ajout des sessions : le premier texte saisi pour un
+  // libellé (même normalisé) sert de texte affiché pour tout le groupe.
+  state.executionSessions.forEach(s => {
+    const texteBrut = (s.label && s.label.trim()) ? s.label.trim() : '';
+    const cle = texteBrut ? normaliserLibelle(texteBrut) : '__sans_libelle__';
+    if(!groupes[cle]) groupes[cle] = { key: cle, label: cle === '__sans_libelle__' ? 'Sans libellé' : texteBrut, heures: 0 };
+    groupes[cle].heures += Number(s.hours) || 0;
+  });
+  return Object.values(groupes).sort((a,b) => a.label.localeCompare(b.label));
+}
+
+/* --- Tarification propre à chaque libellé (Orchestre, Chœur...) : à l'unité ou au forfait --- */
+function obtenirPricingLibelle(label){
+  const config = state.labelPricing[label];
+  return {
+    mode: config && config.mode === 'forfait' ? 'forfait' : 'unite',
+    unitPrice: config ? Number(config.unitPrice) || 0 : 0,
+    participants: config ? Number(config.participants) || 0 : 0,
+    forfaitAmount: config ? Number(config.forfaitAmount) || 0 : 0
+  };
+}
+
+function obtenirParticipantsPourLibelle(label){
+  return obtenirPricingLibelle(label).participants;
+}
+
+function calculerRecettePropreLibelle(label){
+  const pricing = obtenirPricingLibelle(label);
+  // Forfait ou à l'unité : dans les deux cas, un prix par participant × le nombre de
+  // participants. Le "forfait" représente le prix demandé à CHAQUE participant pour
+  // l'ensemble des dates du libellé (pas un montant unique indépendant des participants).
+  const prixParParticipant = pricing.mode === 'forfait' ? pricing.forfaitAmount : pricing.unitPrice;
+  return prixParParticipant * pricing.participants;
+}
+
+function mettreAJourPricingLibelle(label, champ, valeur){
+  if(!state.labelPricing[label]) state.labelPricing[label] = { mode: 'unite', unitPrice: 0, participants: 0, forfaitAmount: 0 };
+  if(champ === 'mode'){
+    state.labelPricing[label].mode = valeur === 'forfait' ? 'forfait' : 'unite';
+  }else{
+    state.labelPricing[label][champ] = parseFloat(valeur) || 0;
+  }
+  planifierSauvegarde();
+  const m = calculerMetriques();
+  const conteneur = document.getElementById('sim-repartition-labels');
+  if(conteneur){
+    conteneur.innerHTML = rendreRepartitionLabelsSimulateur(m);
+    attacherEcouteursPricingLabels();
+  }
+}
+
 function libelleModeDepense(mode){
   return {
     ponctuel_fixe: 'Ponctuel — montant fixe',
@@ -1311,7 +1404,9 @@ function libelleModeDepense(mode){
     hebdo: 'Hebdomadaire (prorata)',
     mensuel: 'Mensuel (prorata)',
     annuel: 'Annuel (prorata)',
-    horaire: 'Tarif horaire (× heures totales)'
+    horaire: 'Tarif horaire (× heures totales)',
+    par_participant: 'Charge variable — par participant',
+    unite_participants: 'À l\'unité (prix × participants propres)'
   }[mode] || mode;
 }
 
@@ -1333,6 +1428,8 @@ function calculerMontantAttribueDepense(depense){
       return (montant / 365) * nbJours;
     case 'horaire':
       return montant * heuresTotal;
+    case 'par_participant':
+      return montant * obtenirParticipantsPourLibelle(depense.relatedLabel);
     default:
       return montant;
   }
@@ -1344,6 +1441,24 @@ function calculerDepensesProratees(){
     const montantAttribue = calculerMontantAttribueDepense(d);
     total += montantAttribue;
     return Object.assign({}, d, { montantAttribue });
+  });
+  return { lignes, total };
+}
+
+/* --- Recettes : même principe que les dépenses, + un mode "à l'unité" propre à la ligne --- */
+function calculerMontantAttribueRecette(recette){
+  if(recette.mode === 'unite_participants'){
+    return (Number(recette.unitPrice) || 0) * (Number(recette.participants) || 0);
+  }
+  return calculerMontantAttribueDepense(recette);
+}
+
+function calculerRecettesProratees(){
+  let total = 0;
+  const lignes = state.revenues.map(r => {
+    const montantAttribue = calculerMontantAttribueRecette(r);
+    total += montantAttribue;
+    return Object.assign({}, r, { montantAttribue });
   });
   return { lignes, total };
 }
@@ -1383,6 +1498,7 @@ function calculerCoutMainOeuvre(){
 
 function calculerMetriques(){
   const depensesProratees = calculerDepensesProratees();
+  const recettesProratees = calculerRecettesProratees();
   const mainOeuvre = calculerCoutMainOeuvre();
 
   const totalDepensesReelles = depensesProratees.total + mainOeuvre.coutTotalSalarie;
@@ -1396,11 +1512,17 @@ function calculerMetriques(){
   const prixTicket = Number(state.simulator.ticketPrice) || 0;
   const nbParticipants = Number(state.simulator.participants) || 0;
   const recettesSimulees = prixTicket * nbParticipants;
-  const resultatSimule = recettesSimulees - totalDepensesReelles;
-  const seuilRentabiliteParticipants = prixTicket > 0 ? Math.ceil(totalDepensesReelles / prixTicket) : null;
+  const recettesSaisiesTotal = recettesProratees.total;
+  const recettesTotal = recettesSimulees + recettesSaisiesTotal;
+  const resultatSimule = recettesTotal - totalDepensesReelles;
+  // Le seuil tient compte des recettes déjà saisies (section Recettes) : il ne reste
+  // à couvrir par la billetterie que ce que ces recettes ne couvrent pas déjà.
+  const montantResteACouvrir = Math.max(0, totalDepensesReelles - recettesSaisiesTotal);
+  const seuilRentabiliteParticipants = prixTicket > 0 ? Math.ceil(montantResteACouvrir / prixTicket) : null;
 
   return {
     depensesProrateesTotal: depensesProratees.total,
+    recettesProrateesTotal: recettesProratees.total,
     coutPreparationSalarie: mainOeuvre.coutPreparationSalarie,
     coutExecutionSalarie: mainOeuvre.coutExecutionSalarie,
     coutTotalSalarie: mainOeuvre.coutTotalSalarie,
@@ -1411,9 +1533,98 @@ function calculerMetriques(){
     heuresExecutionTotal: calculerHeuresExecutionTotal(),
     totalDepensesReelles, totalValorise,
     totalTaches, tachesTerminees, tachesEnCours, avancement,
-    prixTicket, nbParticipants, recettesSimulees, resultatSimule,
+    prixTicket, nbParticipants, recettesSimulees, recettesSaisiesTotal, recettesTotal, resultatSimule,
     seuilRentabiliteParticipants
   };
+}
+
+/* --- Rentabilité par libellé : répartit dépenses/recettes globales au prorata des heures
+   de chaque libellé, et attribue la main d'œuvre d'exécution directement (elle est déjà
+   liée à une session, donc à un libellé précis). --- */
+function calculerRepartitionParLibelle(m){
+  const totauxHeures = calculerTotauxParLibelle();
+  const heuresTotal = m.heuresExecutionTotal;
+
+  // Dépenses générales (tout SAUF la charge variable par participant) : ce sont
+  // celles qu'on répartit au prorata des heures, comme avant.
+  const depensesGenerales = state.expenses.filter(d => d.mode !== 'par_participant');
+  const depensesGeneralesTotal = depensesGenerales.reduce((s, d) => s + calculerMontantAttribueDepense(d), 0);
+  const depensesVariables = state.expenses.filter(d => d.mode === 'par_participant');
+
+  return totauxHeures.map(groupe => {
+    const part = heuresTotal > 0 ? groupe.heures / heuresTotal : 0;
+    const pricing = obtenirPricingLibelle(groupe.label);
+
+    // Main d'œuvre d'exécution : attribution directe via la session (pas de prorata,
+    // on sait déjà à quel libellé chaque heure appartient).
+    let coutExecutionSalarieLabel = 0;
+    state.labor.forEach(entree => {
+      if(entree.phase !== 'execution') return;
+      const session = trouverSession(entree.sessionId);
+      if(!session) return;
+      const labelSessionBrut = (session.label && session.label.trim()) ? session.label.trim() : '';
+      const cleSession = labelSessionBrut ? normaliserLibelle(labelSessionBrut) : '__sans_libelle__';
+      if(cleSession !== groupe.key) return;
+      const membre = trouverMembre(entree.memberId);
+      if(!membre || membre.type !== 'salarie') return;
+      coutExecutionSalarieLabel += (Number(entree.heures) || 0) * (Number(membre.hourlyRate) || 0);
+    });
+
+    // Charges variables par participant rattachées à CE libellé : additionnées telles
+    // quelles (coût par participant), pour la formule du seuil, PUIS multipliées par le
+    // nombre de participants du libellé pour entrer dans le total des dépenses.
+    const chargeVariableUnitaireLabel = depensesVariables
+      .filter(d => (d.relatedLabel || '').trim() === groupe.label)
+      .reduce((s, d) => s + (Number(d.amount) || 0), 0);
+    const coutVariableTotalLabel = chargeVariableUnitaireLabel * pricing.participants;
+
+    // Dépenses générales + préparation : réparties au prorata des heures (charges fixes).
+    const depensesGeneralesLabel = depensesGeneralesTotal * part;
+    const coutPreparationSalarieLabel = m.coutPreparationSalarie * part;
+    const chargesFixesLabel = depensesGeneralesLabel + coutPreparationSalarieLabel + coutExecutionSalarieLabel;
+
+    const totalDepensesReellesLabel = chargesFixesLabel + coutVariableTotalLabel;
+
+    // Recettes : UNIQUEMENT la tarification propre à ce libellé (forfait, ou prix ×
+    // participants). Le pool général (curseur global + section Recettes non rattachée)
+    // n'entre plus dans le résultat par libellé, pour que 0 participant/0 prix donne
+    // bien 0 € de recette ici — cette part générale reste comptée dans les totaux globaux.
+    const recettesLabel = calculerRecettePropreLibelle(groupe.label);
+
+    const resultatLabel = recettesLabel - totalDepensesReellesLabel;
+
+    // Seuil de rentabilité par libellé — sécurisé contre les divisions par zéro/négatives :
+    // - forfait et à l'unité utilisent maintenant la même logique : chacun a un "prix par
+    //   participant" (forfaitAmount ou unitPrice) qui, multiplié par le nombre de
+    //   participants, donne la recette. La marge par participant doit être positive.
+    // - si le prix par participant ne couvre même pas la charge variable par participant,
+    //   aucun nombre de participants ne suffira à équilibrer (seuil non atteignable).
+    // - si les charges fixes sont déjà couvertes (≤ 0), le seuil est 0 (jamais négatif).
+    const prixParParticipant = pricing.mode === 'forfait' ? pricing.forfaitAmount : pricing.unitPrice;
+    const margeUnitaire = prixParParticipant - chargeVariableUnitaireLabel;
+    let seuilLabel = null;
+    let seuilLabelStatut; // 'ok' | 'non_atteignable'
+    if(margeUnitaire > 0){
+      seuilLabel = chargesFixesLabel <= 0 ? 0 : Math.ceil(chargesFixesLabel / margeUnitaire);
+      seuilLabelStatut = 'ok';
+    }else{
+      seuilLabelStatut = 'non_atteignable';
+    }
+
+    return {
+      label: groupe.label,
+      heures: groupe.heures,
+      chargesFixesLabel,
+      chargeVariableUnitaireLabel,
+      coutVariableTotalLabel,
+      totalDepensesReellesLabel,
+      recettesLabel,
+      resultatLabel,
+      pricing,
+      seuilLabel,
+      seuilLabelStatut
+    };
+  });
 }
 
 function libelleStatutTache(statut){
@@ -1541,7 +1752,7 @@ function dessinerGraphiqueRentabilite(m){
   const coutsData = [];
   for(let p = 0; p <= maxParticipants; p += pas){
     labels.push(p);
-    recettesData.push(p * prix);
+    recettesData.push(p * prix + m.recettesSaisiesTotal);
     coutsData.push(m.totalDepensesReelles);
   }
   if(profitChartInstance) profitChartInstance.destroy();
@@ -2015,7 +2226,7 @@ function rendreBudget(){
     <tr>
       <td style="font-weight:600;">${formaterDate(s.date)}</td>
       <td>${s.label ? echapperHtml(s.label) : '<span style="color:var(--ink-soft);">—</span>'}</td>
-      <td class="font-mono-num">${Number(s.hours) || 0} h</td>
+      <td class="font-mono-num">${s.startTime && s.endTime ? `${s.startTime}–${s.endTime} <span style="color:var(--ink-soft);">(${Number(s.hours) || 0} h)</span>` : `${Number(s.hours) || 0} h`}</td>
       <td style="text-align:right; white-space:nowrap;">
         <button class="btn-edit-ghost" onclick="ouvrirModalSession('${s.id}')" title="Modifier">
           <i data-lucide="pencil" style="width:16px;height:16px;"></i>
@@ -2027,19 +2238,50 @@ function rendreBudget(){
     </tr>
   `).join('');
 
+  /* --- Totaux d'heures par libellé --- */
+  const totauxLibelles = calculerTotauxParLibelle();
+  const lignesTotauxLibelles = totauxLibelles.map(g => `
+    <tr>
+      <td style="font-weight:600;">${echapperHtml(g.label)}</td>
+      <td class="font-mono-num" style="font-weight:700;">${g.heures} h</td>
+    </tr>
+  `).join('');
+
   /* --- Dépenses proratées --- */
   const depensesCalculees = calculerDepensesProratees().lignes;
   const lignesDepenses = depensesCalculees.map(d => `
     <tr>
       <td style="font-weight:600; max-width:180px;">${echapperHtml(d.label)}</td>
-      <td><span class="badge" style="background:var(--primary-soft); color:var(--primary-dark);">${libelleModeDepense(d.mode)}</span></td>
-      <td class="font-mono-num">${formaterMontant(d.amount)}</td>
+      <td>
+        <span class="badge" style="background:var(--primary-soft); color:var(--primary-dark);">${libelleModeDepense(d.mode)}</span>
+        ${d.mode === 'par_participant' && d.relatedLabel ? `<div style="font-size:11px; color:var(--ink-soft); margin-top:4px;">→ ${echapperHtml(d.relatedLabel)}</div>` : ''}
+      </td>
+      <td class="font-mono-num">${d.mode === 'par_participant' ? formaterMontant(d.amount) + ' / participant' : formaterMontant(d.amount)}</td>
       <td class="font-mono-num" style="font-weight:700;">${formaterMontant(d.montantAttribue)}</td>
       <td style="text-align:right; white-space:nowrap;">
         <button class="btn-edit-ghost" onclick="ouvrirModalDepense('${d.id}')" title="Modifier">
           <i data-lucide="pencil" style="width:16px;height:16px;"></i>
         </button>
         <button class="btn-danger-ghost" onclick="supprimerDepense('${d.id}')" title="Supprimer">
+          <i data-lucide="trash-2" style="width:16px;height:16px;"></i>
+        </button>
+      </td>
+    </tr>
+  `).join('');
+
+  /* --- Recettes proratées --- */
+  const recettesCalculees = calculerRecettesProratees().lignes;
+  const lignesRecettes = recettesCalculees.map(r => `
+    <tr>
+      <td style="font-weight:600; max-width:180px;">${echapperHtml(r.label)}</td>
+      <td><span class="badge" style="background:var(--success-soft); color:var(--success);">${libelleModeDepense(r.mode)}</span></td>
+      <td class="font-mono-num">${r.mode === 'unite_participants' ? formaterMontant(r.unitPrice) + ' × ' + (r.participants || 0) : formaterMontant(r.amount)}</td>
+      <td class="font-mono-num" style="font-weight:700;">${formaterMontant(r.montantAttribue)}</td>
+      <td style="text-align:right; white-space:nowrap;">
+        <button class="btn-edit-ghost" onclick="ouvrirModalRecette('${r.id}')" title="Modifier">
+          <i data-lucide="pencil" style="width:16px;height:16px;"></i>
+        </button>
+        <button class="btn-danger-ghost" onclick="supprimerRecette('${r.id}')" title="Supprimer">
           <i data-lucide="trash-2" style="width:16px;height:16px;"></i>
         </button>
       </td>
@@ -2103,6 +2345,10 @@ function rendreBudget(){
         <div class="font-mono-num" style="font-size:19px; font-weight:700;">${formaterMontant(m.depensesProrateesTotal)}</div>
       </div>
       <div class="card" style="padding:16px;">
+        <div style="font-size:12px; color:var(--ink-soft); font-weight:600; margin-bottom:6px;">Recettes attribuées au projet</div>
+        <div class="font-mono-num" style="font-size:19px; font-weight:700; color:var(--success);">${formaterMontant(m.recettesProrateesTotal)}</div>
+      </div>
+      <div class="card" style="padding:16px;">
         <div style="font-size:12px; color:var(--ink-soft); font-weight:600; margin-bottom:6px;">Main d'œuvre salariée (total)</div>
         <div class="font-mono-num" style="font-size:19px; font-weight:700;">${formaterMontant(m.coutTotalSalarie)}</div>
         <div style="font-size:11px; color:var(--ink-soft); margin-top:4px;">Prépa ${formaterMontant(m.coutPreparationSalarie)} · Exéc ${formaterMontant(m.coutExecutionSalarie)}</div>
@@ -2141,6 +2387,41 @@ function rendreBudget(){
           <table class="data-table">
             <thead><tr><th>Date</th><th>Libellé</th><th>Durée</th><th></th></tr></thead>
             <tbody>${lignesSessions}</tbody>
+          </table>
+        </div>
+        ${totauxLibelles.length > 1 ? `
+          <div style="margin-top:16px; padding-top:16px; border-top:1px solid var(--border);">
+            <h4 class="font-display" style="font-size:13px; font-weight:700; margin:0 0 10px 0;">Total d'heures par libellé</h4>
+            <div style="overflow-x:auto;">
+              <table class="data-table">
+                <thead><tr><th>Libellé</th><th>Total heures</th></tr></thead>
+                <tbody>${lignesTotauxLibelles}</tbody>
+              </table>
+            </div>
+          </div>
+        ` : ''}
+      `}
+    </div>
+
+    <div class="card" style="padding:22px; margin-bottom:20px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; flex-wrap:wrap; gap:10px;">
+        <div>
+          <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0;">Recettes</h3>
+          <p style="font-size:12px; color:var(--ink-soft); margin:2px 0 0 0;">Fonctionne comme les Dépenses : chaque recette est automatiquement proratisée selon son mode de calcul</p>
+        </div>
+        <button class="btn-primary" onclick="ouvrirModalRecette()">
+          <i data-lucide="plus" style="width:15px;height:15px;"></i> Ajouter une recette
+        </button>
+      </div>
+      ${state.revenues.length === 0 ? `
+        <div style="text-align:center; padding:30px 10px; color:var(--ink-soft);">
+          <p style="font-size:13.5px; margin:0;">Aucune recette saisie. Ajoute la vente de billets, un subside, un don, etc.</p>
+        </div>
+      ` : `
+        <div style="overflow-x:auto;">
+          <table class="data-table">
+            <thead><tr><th>Libellé</th><th>Mode de calcul</th><th>Montant saisi</th><th>Attribué au projet</th><th></th></tr></thead>
+            <tbody>${lignesRecettes}</tbody>
           </table>
         </div>
       `}
@@ -2242,17 +2523,26 @@ function rendreBudget(){
       <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px,1fr)); gap:14px;" id="sim-resultats">
         ${rendreResultatsSimulateur(m)}
       </div>
+
+      <div id="sim-repartition-labels">
+        ${rendreRepartitionLabelsSimulateur(m)}
+      </div>
     </div>
   `;
   rafraichirIcones();
+  attacherEcouteursPricingLabels();
 }
 
 function rendreResultatsSimulateur(m){
   const estViable = m.resultatSimule >= 0;
   return `
     <div class="card" style="padding:16px; background:var(--surface-2); border:none;">
-      <div style="font-size:12px; color:var(--ink-soft); font-weight:600; margin-bottom:6px;">Recettes simulées</div>
+      <div style="font-size:12px; color:var(--ink-soft); font-weight:600; margin-bottom:6px;">Recettes simulées (billetterie)</div>
       <div class="font-mono-num" style="font-size:19px; font-weight:700;">${formaterMontant(m.recettesSimulees)}</div>
+    </div>
+    <div class="card" style="padding:16px; background:var(--surface-2); border:none;">
+      <div style="font-size:12px; color:var(--ink-soft); font-weight:600; margin-bottom:6px;">Recettes saisies (section Recettes)</div>
+      <div class="font-mono-num" style="font-size:19px; font-weight:700;">${formaterMontant(m.recettesSaisiesTotal)}</div>
     </div>
     <div class="card" style="padding:16px; background:var(--surface-2); border:none;">
       <div style="font-size:12px; color:var(--ink-soft); font-weight:600; margin-bottom:6px;">Seuil de rentabilité</div>
@@ -2265,6 +2555,88 @@ function rendreResultatsSimulateur(m){
   `;
 }
 
+/* --- Détail de rentabilité par libellé (Orchestre, Chœur, Solistes...) : chaque ligne
+   reprend automatiquement les heures, les coûts et les recettes de ce libellé. --- */
+function rendreRepartitionLabelsSimulateur(m){
+  const repartition = calculerRepartitionParLibelle(m);
+  if(repartition.length < 2) return ''; // pas utile s'il n'y a qu'un seul libellé (ou aucun)
+
+  const cartes = repartition.map(r => {
+    const estViableLabel = r.resultatLabel >= 0;
+    let seuilTexte;
+    if(r.seuilLabelStatut === 'non_atteignable') seuilTexte = 'Non atteignable';
+    else seuilTexte = r.seuilLabel + ' participant(s)';
+
+    return `
+      <div class="card" style="padding:16px; margin-bottom:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
+          <div style="font-weight:700; font-size:13.5px;">${echapperHtml(r.label)} <span style="font-weight:400; color:var(--ink-soft); font-size:12px;">(${r.heures} h)</span></div>
+          <div style="display:flex; gap:6px;">
+            <button type="button" class="btn-secondary btn-pricing-mode" data-label="${echapperHtml(r.label)}" data-mode="unite" style="padding:6px 12px; font-size:12px; ${r.pricing.mode === 'unite' ? 'background:var(--primary-soft); color:var(--primary-dark); border-color:var(--primary-soft);' : ''}">À l'unité</button>
+            <button type="button" class="btn-secondary btn-pricing-mode" data-label="${echapperHtml(r.label)}" data-mode="forfait" style="padding:6px 12px; font-size:12px; ${r.pricing.mode === 'forfait' ? 'background:var(--primary-soft); color:var(--primary-dark); border-color:var(--primary-soft);' : ''}">Forfait</button>
+          </div>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px,1fr)); gap:10px; margin-bottom:14px;">
+          <div>
+            <label class="field-label">Participants (ce libellé)</label>
+            <input type="number" class="input-field label-pricing-input" data-label="${echapperHtml(r.label)}" data-champ="participants" min="0" step="1" value="${r.pricing.participants}">
+          </div>
+          ${r.pricing.mode === 'forfait' ? `
+            <div>
+              <label class="field-label">Montant forfaitaire par participant (€)</label>
+              <input type="number" class="input-field label-pricing-input" data-label="${echapperHtml(r.label)}" data-champ="forfaitAmount" min="0" step="1" value="${r.pricing.forfaitAmount}">
+              <p style="font-size:11px; color:var(--ink-soft); margin:6px 0 0 0;">${r.pricing.participants > 0
+                ? `Prix minimum pour couvrir les charges avec ${r.pricing.participants} participant(s) : <strong class="font-mono-num">${formaterMontant(r.chargesFixesLabel / r.pricing.participants + r.chargeVariableUnitaireLabel)}</strong>`
+                : `Prix minimum pour 1 participant : <strong class="font-mono-num">${formaterMontant(r.chargesFixesLabel + r.chargeVariableUnitaireLabel)}</strong> <span style="color:var(--ink-soft);">(renseigne le nombre de participants pour un calcul précis)</span>`
+              }</p>
+            </div>
+          ` : `
+            <div>
+              <label class="field-label">Prix unitaire (€)</label>
+              <input type="number" class="input-field label-pricing-input" data-label="${echapperHtml(r.label)}" data-champ="unitPrice" min="0" step="0.5" value="${r.pricing.unitPrice}">
+              <p style="font-size:11px; color:var(--ink-soft); margin:6px 0 0 0;">${r.pricing.participants > 0
+                ? `Prix minimum pour couvrir les charges avec ${r.pricing.participants} participant(s) : <strong class="font-mono-num">${formaterMontant(r.chargesFixesLabel / r.pricing.participants + r.chargeVariableUnitaireLabel)}</strong>`
+                : `Prix minimum pour 1 participant : <strong class="font-mono-num">${formaterMontant(r.chargesFixesLabel + r.chargeVariableUnitaireLabel)}</strong> <span style="color:var(--ink-soft);">(renseigne le nombre de participants pour un calcul précis)</span>`
+              }</p>
+            </div>
+          `}
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px,1fr)); gap:12px; font-size:12.5px; padding-top:12px; border-top:1px solid var(--border);">
+          <div><div style="color:var(--ink-soft); margin-bottom:3px;">Dépenses</div><div class="font-mono-num" style="font-weight:700;">${formaterMontant(r.totalDepensesReellesLabel)}</div></div>
+          <div><div style="color:var(--ink-soft); margin-bottom:3px;">Recettes</div><div class="font-mono-num" style="font-weight:700;">${formaterMontant(r.recettesLabel)}</div></div>
+          <div><div style="color:var(--ink-soft); margin-bottom:3px;">Résultat</div><div class="font-mono-num" style="font-weight:700; color:${estViableLabel ? 'var(--success)' : 'var(--danger)'};">${estViableLabel ? '+' : ''}${formaterMontant(r.resultatLabel)}</div></div>
+          <div><div style="color:var(--ink-soft); margin-bottom:3px;">Seuil de rentabilité</div><div class="font-mono-num" style="font-weight:700;">${seuilTexte}</div></div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div style="margin-top:22px; padding-top:20px; border-top:1px solid var(--border);">
+      <h4 class="font-display" style="font-size:14px; font-weight:700; margin:0 0 4px 0;">Rentabilité par libellé</h4>
+      <p style="font-size:11.5px; color:var(--ink-soft); margin:0 0 14px 0;">Chaque libellé a son propre prix (à l'unité ou au forfait) et son propre nombre de participants : les recettes et le seuil affichés ici ne reflètent QUE cette tarification propre. Les dépenses générales et la préparation restent réparties au prorata des heures ; main d'œuvre d'exécution et charges variables par participant attribuées directement à leur libellé.</p>
+      ${cartes}
+    </div>
+  `;
+}
+
+/* --- Écouteurs pour les contrôles de tarification par libellé (délégation, pas d'onclick
+   inline, pour éviter tout problème d'échappement si un libellé contient des guillemets) --- */
+function attacherEcouteursPricingLabels(){
+  const conteneur = document.getElementById('sim-repartition-labels');
+  if(!conteneur) return;
+  conteneur.querySelectorAll('.btn-pricing-mode').forEach(btn => {
+    btn.addEventListener('click', () => {
+      mettreAJourPricingLibelle(btn.dataset.label, 'mode', btn.dataset.mode);
+    });
+  });
+  conteneur.querySelectorAll('.label-pricing-input').forEach(input => {
+    input.addEventListener('change', () => {
+      mettreAJourPricingLibelle(input.dataset.label, input.dataset.champ, input.value);
+    });
+  });
+}
+
 function ajusterSimulateur(){
   const participants = parseInt(document.getElementById('sim-participants').value, 10) || 0;
   const prix = parseInt(document.getElementById('sim-prix').value, 10) || 0;
@@ -2274,6 +2646,8 @@ function ajusterSimulateur(){
   document.getElementById('sim-prix-val').textContent = formaterMontant(prix);
   const m = calculerMetriques();
   document.getElementById('sim-resultats').innerHTML = rendreResultatsSimulateur(m);
+  document.getElementById('sim-repartition-labels').innerHTML = rendreRepartitionLabelsSimulateur(m);
+  attacherEcouteursPricingLabels();
   planifierSauvegarde();
   if(currentView === 'accueil') rendreAccueil();
 }
@@ -2282,6 +2656,7 @@ function ajusterSimulateur(){
 function ouvrirModalSession(id){
   editingSessionId = id || null;
   const session = editingSessionId ? trouverSession(editingSessionId) : null;
+  const modeInitial = session && session.startTime && session.endTime ? 'range' : 'manual';
   const racine = document.getElementById('modal-root');
   racine.innerHTML = `
     <div class="modal-backdrop show" id="modal-session-backdrop">
@@ -2294,11 +2669,33 @@ function ouvrirModalSession(id){
           </div>
           <div>
             <label class="field-label">Libellé (optionnel)</label>
-            <input type="text" class="input-field" id="session-label" placeholder="Ex. Soirée concert" value="${session ? echapperHtml(session.label || '') : ''}">
+            <input type="text" class="input-field" id="session-label" list="liste-libelles-existants" placeholder="Ex. Orchestre, Chœur..." value="${session ? echapperHtml(session.label || '') : ''}">
+            <datalist id="liste-libelles-existants">
+              ${calculerTotauxParLibelle().filter(g => g.key !== '__sans_libelle__').map(g => `<option value="${echapperHtml(g.label)}"></option>`).join('')}
+            </datalist>
           </div>
           <div>
-            <label class="field-label">Durée (heures)</label>
-            <input type="number" class="input-field" id="session-heures" min="0" step="0.5" placeholder="Ex. 4" value="${session ? Number(session.hours) || 0 : ''}">
+            <label class="field-label">Durée</label>
+            <div style="display:flex; gap:8px; margin-bottom:10px;">
+              <button type="button" class="btn-secondary" id="btn-mode-manuel" style="flex:1; justify-content:center;" onclick="basculerModeDureeSession('manual')">Durée manuelle</button>
+              <button type="button" class="btn-secondary" id="btn-mode-plage" style="flex:1; justify-content:center;" onclick="basculerModeDureeSession('range')">Plage horaire</button>
+            </div>
+            <div id="bloc-duree-manuelle">
+              <input type="number" class="input-field" id="session-heures" min="0" step="0.5" placeholder="Ex. 4" value="${session ? Number(session.hours) || 0 : ''}">
+            </div>
+            <div id="bloc-duree-plage" style="display:none;">
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+                <div>
+                  <label class="field-label">Début</label>
+                  <input type="time" class="input-field" id="session-heure-debut" value="${session && session.startTime ? session.startTime : ''}" oninput="mettreAJourDureeCalculee()">
+                </div>
+                <div>
+                  <label class="field-label">Fin</label>
+                  <input type="time" class="input-field" id="session-heure-fin" value="${session && session.endTime ? session.endTime : ''}" oninput="mettreAJourDureeCalculee()">
+                </div>
+              </div>
+              <p style="font-size:12px; color:var(--ink-soft); margin:8px 0 0 0;">Durée calculée : <strong id="session-duree-calculee" class="font-mono-num">0 h</strong></p>
+            </div>
           </div>
         </div>
         <div style="display:flex; gap:10px; margin-top:20px; justify-content:flex-end;">
@@ -2309,23 +2706,61 @@ function ouvrirModalSession(id){
     </div>
   `;
   rafraichirIcones();
+  basculerModeDureeSession(modeInitial);
+  mettreAJourDureeCalculee();
   document.getElementById('modal-session-backdrop').addEventListener('click', (e) => { if(e.target.id === 'modal-session-backdrop') fermerModal(); });
+}
+
+/* --- Bascule entre saisie manuelle des heures et saisie d'une plage horaire --- */
+function basculerModeDureeSession(mode){
+  const blocManuel = document.getElementById('bloc-duree-manuelle');
+  const blocPlage = document.getElementById('bloc-duree-plage');
+  const btnManuel = document.getElementById('btn-mode-manuel');
+  const btnPlage = document.getElementById('btn-mode-plage');
+  if(!blocManuel || !blocPlage) return;
+  blocManuel.style.display = mode === 'manual' ? 'block' : 'none';
+  blocPlage.style.display = mode === 'range' ? 'block' : 'none';
+  blocManuel.dataset.actif = mode === 'manual' ? '1' : '0';
+  blocPlage.dataset.actif = mode === 'range' ? '1' : '0';
+  btnManuel.style.background = mode === 'manual' ? 'var(--primary-soft)' : 'var(--surface)';
+  btnManuel.style.color = mode === 'manual' ? 'var(--primary-dark)' : 'var(--ink)';
+  btnPlage.style.background = mode === 'range' ? 'var(--primary-soft)' : 'var(--surface)';
+  btnPlage.style.color = mode === 'range' ? 'var(--primary-dark)' : 'var(--ink)';
+}
+
+function mettreAJourDureeCalculee(){
+  const elDebut = document.getElementById('session-heure-debut');
+  const elFin = document.getElementById('session-heure-fin');
+  const elAffichage = document.getElementById('session-duree-calculee');
+  if(!elDebut || !elFin || !elAffichage) return;
+  const duree = calculerDureeDepuisPlage(elDebut.value, elFin.value);
+  elAffichage.textContent = duree + ' h';
 }
 
 function enregistrerSession(){
   const date = document.getElementById('session-date').value;
   const label = document.getElementById('session-label').value.trim();
-  const heures = parseFloat(document.getElementById('session-heures').value) || 0;
+  const modeManuelActif = document.getElementById('bloc-duree-manuelle').dataset.actif === '1';
   if(!date){ afficherToast('Indique la date de cette session.', 'erreur'); return; }
+
+  let heures, startTime = null, endTime = null;
+  if(modeManuelActif){
+    heures = parseFloat(document.getElementById('session-heures').value) || 0;
+  }else{
+    startTime = document.getElementById('session-heure-debut').value || null;
+    endTime = document.getElementById('session-heure-fin').value || null;
+    if(!startTime || !endTime){ afficherToast('Indique une heure de début et de fin.', 'erreur'); return; }
+    heures = calculerDureeDepuisPlage(startTime, endTime);
+  }
 
   if(editingSessionId){
     const session = trouverSession(editingSessionId);
-    if(session){ session.date = date; session.label = label; session.hours = heures; }
+    if(session){ session.date = date; session.label = label; session.hours = heures; session.startTime = startTime; session.endTime = endTime; }
     afficherToast('Session modifiée.', 'succes');
     editingSessionId = null;
     enregistrerAction('a modifié une session d\'exécution (' + date + ')');
   }else{
-    state.executionSessions.push({ id: genererId(), date, label, hours: heures });
+    state.executionSessions.push({ id: genererId(), date, label, hours: heures, startTime, endTime });
     afficherToast('Session ajoutée.', 'succes');
     editingSessionId = null;
     enregistrerAction('a ajouté une session d\'exécution (' + date + ')');
@@ -2352,6 +2787,10 @@ function supprimerSession(id){
 function ouvrirModalDepense(id){
   editingExpenseId = id || null;
   const depense = editingExpenseId ? state.expenses.find(d => d.id === editingExpenseId) : null;
+  const libellesDisponibles = calculerTotauxParLibelle().map(g => g.label);
+  const optionsLibelles = libellesDisponibles.length === 0
+    ? `<option value="">Aucun libellé disponible (ajoute une session)</option>`
+    : libellesDisponibles.map(l => `<option value="${echapperHtml(l)}" ${depense && depense.relatedLabel === l ? 'selected' : ''}>${echapperHtml(l)}</option>`).join('');
   const racine = document.getElementById('modal-root');
   racine.innerHTML = `
     <div class="modal-backdrop show" id="modal-depense-backdrop">
@@ -2371,7 +2810,13 @@ function ouvrirModalDepense(id){
               <option value="mensuel" ${depense && depense.mode === 'mensuel' ? 'selected' : ''}>Mensuel (prorata sur les jours d'exécution)</option>
               <option value="annuel" ${depense && depense.mode === 'annuel' ? 'selected' : ''}>Annuel (prorata sur les jours d'exécution)</option>
               <option value="horaire" ${depense && depense.mode === 'horaire' ? 'selected' : ''}>Tarif horaire (× heures totales d'exécution)</option>
+              <option value="par_participant" ${depense && depense.mode === 'par_participant' ? 'selected' : ''}>Charge variable — par participant (liée à un libellé)</option>
             </select>
+          </div>
+          <div id="depense-bloc-libelle" style="display:none;">
+            <label class="field-label">Libellé associé</label>
+            <select class="input-field" id="depense-libelle-associe">${optionsLibelles}</select>
+            <p style="font-size:11.5px; color:var(--ink-soft); margin:6px 0 0 0;">Le nombre de participants de ce libellé est défini dans l'onglet Simulateur.</p>
           </div>
           <div>
             <label class="field-label" id="depense-montant-label">Montant (€)</label>
@@ -2399,7 +2844,8 @@ function mettreAJourLabelMontantDepense(){
     hebdo: 'Montant hebdomadaire (€)',
     mensuel: 'Montant mensuel (€)',
     annuel: 'Montant annuel (€)',
-    horaire: 'Tarif horaire (€ / h)'
+    horaire: 'Tarif horaire (€ / h)',
+    par_participant: 'Coût par participant (€)'
   };
   const aides = {
     ponctuel_fixe: 'Montant fixe, non multiplié par le nombre de jours.',
@@ -2407,10 +2853,12 @@ function mettreAJourLabelMontantDepense(){
     hebdo: 'Le montant hebdomadaire est divisé par 7 puis multiplié par le nombre de jours d\'exécution.',
     mensuel: 'Le montant mensuel est divisé par 30 puis multiplié par le nombre de jours d\'exécution.',
     annuel: 'Le montant annuel est divisé par 365 puis multiplié par le nombre de jours d\'exécution.',
-    horaire: 'Ce tarif horaire est multiplié par le total des heures de toutes les sessions d\'exécution.'
+    horaire: 'Ce tarif horaire est multiplié par le total des heures de toutes les sessions d\'exécution.',
+    par_participant: 'Ce montant est multiplié par le nombre de participants du libellé associé (défini dans le Simulateur).'
   };
   document.getElementById('depense-montant-label').textContent = labels[mode];
   document.getElementById('depense-aide').textContent = aides[mode];
+  document.getElementById('depense-bloc-libelle').style.display = mode === 'par_participant' ? 'block' : 'none';
 }
 
 function enregistrerDepense(){
@@ -2419,14 +2867,20 @@ function enregistrerDepense(){
   const montant = parseFloat(document.getElementById('depense-montant').value) || 0;
   if(!label){ afficherToast('Indique un libellé pour ce coût.', 'erreur'); return; }
 
+  let relatedLabel = null;
+  if(mode === 'par_participant'){
+    relatedLabel = document.getElementById('depense-libelle-associe').value;
+    if(!relatedLabel){ afficherToast('Choisis le libellé auquel rattacher cette charge variable.', 'erreur'); return; }
+  }
+
   if(editingExpenseId){
     const depense = state.expenses.find(d => d.id === editingExpenseId);
-    if(depense){ depense.label = label; depense.mode = mode; depense.amount = montant; }
+    if(depense){ depense.label = label; depense.mode = mode; depense.amount = montant; depense.relatedLabel = relatedLabel; }
     afficherToast('Coût modifié.', 'succes');
     editingExpenseId = null;
     enregistrerAction('a modifié le coût « ' + label + ' » (' + formaterMontant(montant) + ')');
   }else{
-    state.expenses.push({ id: genererId(), label, mode, amount: montant });
+    state.expenses.push({ id: genererId(), label, mode, amount: montant, relatedLabel });
     afficherToast('Coût ajouté.', 'succes');
     editingExpenseId = null;
     enregistrerAction('a ajouté le coût « ' + label + ' » (' + formaterMontant(montant) + ')');
@@ -2444,6 +2898,130 @@ function supprimerDepense(id){
   rendreBudget();
   rendreAccueil();
   afficherToast('Coût supprimé.', 'info');
+}
+
+/* --- Recettes : CRUD avec mode de calcul (même principe que les Dépenses) --- */
+function ouvrirModalRecette(id){
+  editingRevenueId = id || null;
+  const recette = editingRevenueId ? state.revenues.find(r => r.id === editingRevenueId) : null;
+  const racine = document.getElementById('modal-root');
+  racine.innerHTML = `
+    <div class="modal-backdrop show" id="modal-recette-backdrop">
+      <div class="modal-box">
+        <h3 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 16px 0;">${recette ? 'Modifier la recette' : 'Ajouter une recette'}</h3>
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <div>
+            <label class="field-label">Libellé</label>
+            <input type="text" class="input-field" id="recette-label" placeholder="Ex. Vente de billets" value="${recette ? echapperHtml(recette.label) : ''}">
+          </div>
+          <div>
+            <label class="field-label">Mode de calcul</label>
+            <select class="input-field" id="recette-mode" onchange="mettreAJourLabelMontantRecette()">
+              <option value="ponctuel_fixe" ${recette && recette.mode === 'ponctuel_fixe' ? 'selected' : ''}>Ponctuel — montant fixe</option>
+              <option value="ponctuel_jour" ${recette && recette.mode === 'ponctuel_jour' ? 'selected' : ''}>Ponctuel — par jour d'exécution</option>
+              <option value="hebdo" ${recette && recette.mode === 'hebdo' ? 'selected' : ''}>Hebdomadaire (prorata sur les jours d'exécution)</option>
+              <option value="mensuel" ${recette && recette.mode === 'mensuel' ? 'selected' : ''}>Mensuel (prorata sur les jours d'exécution)</option>
+              <option value="annuel" ${recette && recette.mode === 'annuel' ? 'selected' : ''}>Annuel (prorata sur les jours d'exécution)</option>
+              <option value="horaire" ${recette && recette.mode === 'horaire' ? 'selected' : ''}>Tarif horaire (× heures totales d'exécution)</option>
+              <option value="unite_participants" ${recette && recette.mode === 'unite_participants' ? 'selected' : ''}>À l'unité — prix × participants (propres à cette ligne)</option>
+            </select>
+          </div>
+          <div id="recette-bloc-standard">
+            <label class="field-label" id="recette-montant-label">Montant (€)</label>
+            <input type="number" class="input-field" id="recette-montant" min="0" step="0.5" placeholder="0.00" value="${recette ? recette.amount : ''}">
+            <p id="recette-aide" style="font-size:11.5px; color:var(--ink-soft); margin:6px 0 0 0;">Montant fixe, non multiplié par le nombre de jours.</p>
+          </div>
+          <div id="recette-bloc-unite" style="display:none;">
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+              <div>
+                <label class="field-label">Prix unitaire (€)</label>
+                <input type="number" class="input-field" id="recette-prix-unitaire" min="0" step="0.5" placeholder="Ex. 15" value="${recette && recette.unitPrice ? recette.unitPrice : ''}">
+              </div>
+              <div>
+                <label class="field-label">Nombre de participants</label>
+                <input type="number" class="input-field" id="recette-participants" min="0" step="1" placeholder="Ex. 50" value="${recette && recette.participants ? recette.participants : ''}">
+              </div>
+            </div>
+            <p style="font-size:11.5px; color:var(--ink-soft); margin:6px 0 0 0;">Ce nombre de participants est propre à cette ligne de recette, indépendant du Simulateur.</p>
+          </div>
+        </div>
+        <div style="display:flex; gap:10px; margin-top:20px; justify-content:flex-end;">
+          <button class="btn-secondary" onclick="fermerModal()">Annuler</button>
+          <button class="btn-primary" onclick="enregistrerRecette()"><i data-lucide="check" style="width:15px;height:15px;"></i> ${recette ? 'Enregistrer les modifications' : 'Ajouter'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
+  mettreAJourLabelMontantRecette();
+  document.getElementById('modal-recette-backdrop').addEventListener('click', (e) => { if(e.target.id === 'modal-recette-backdrop') fermerModal(); });
+}
+
+function mettreAJourLabelMontantRecette(){
+  const mode = document.getElementById('recette-mode').value;
+  const labels = {
+    ponctuel_fixe: 'Montant (€)',
+    ponctuel_jour: 'Montant par jour (€)',
+    hebdo: 'Montant hebdomadaire (€)',
+    mensuel: 'Montant mensuel (€)',
+    annuel: 'Montant annuel (€)',
+    horaire: 'Tarif horaire (€ / h)'
+  };
+  const aides = {
+    ponctuel_fixe: 'Montant fixe, non multiplié par le nombre de jours.',
+    ponctuel_jour: 'Ce montant sera multiplié par le nombre de jours d\'exécution.',
+    hebdo: 'Le montant hebdomadaire est divisé par 7 puis multiplié par le nombre de jours d\'exécution.',
+    mensuel: 'Le montant mensuel est divisé par 30 puis multiplié par le nombre de jours d\'exécution.',
+    annuel: 'Le montant annuel est divisé par 365 puis multiplié par le nombre de jours d\'exécution.',
+    horaire: 'Ce tarif horaire est multiplié par le total des heures de toutes les sessions d\'exécution.'
+  };
+  const estUnite = mode === 'unite_participants';
+  document.getElementById('recette-bloc-standard').style.display = estUnite ? 'none' : 'block';
+  document.getElementById('recette-bloc-unite').style.display = estUnite ? 'block' : 'none';
+  if(!estUnite){
+    document.getElementById('recette-montant-label').textContent = labels[mode];
+    document.getElementById('recette-aide').textContent = aides[mode];
+  }
+}
+
+function enregistrerRecette(){
+  const label = document.getElementById('recette-label').value.trim();
+  const mode = document.getElementById('recette-mode').value;
+  if(!label){ afficherToast('Indique un libellé pour cette recette.', 'erreur'); return; }
+
+  let montant = 0, unitPrice = null, participants = null;
+  if(mode === 'unite_participants'){
+    unitPrice = parseFloat(document.getElementById('recette-prix-unitaire').value) || 0;
+    participants = parseFloat(document.getElementById('recette-participants').value) || 0;
+  }else{
+    montant = parseFloat(document.getElementById('recette-montant').value) || 0;
+  }
+
+  if(editingRevenueId){
+    const recette = state.revenues.find(r => r.id === editingRevenueId);
+    if(recette){ recette.label = label; recette.mode = mode; recette.amount = montant; recette.unitPrice = unitPrice; recette.participants = participants; }
+    afficherToast('Recette modifiée.', 'succes');
+    editingRevenueId = null;
+    enregistrerAction('a modifié la recette « ' + label + ' »');
+  }else{
+    state.revenues.push({ id: genererId(), label, mode, amount: montant, unitPrice, participants });
+    afficherToast('Recette ajoutée.', 'succes');
+    editingRevenueId = null;
+    enregistrerAction('a ajouté la recette « ' + label + ' »');
+  }
+  fermerModal();
+  rendreBudget();
+  rendreAccueil();
+}
+
+function supprimerRecette(id){
+  const recette = state.revenues.find(r => r.id === id);
+  const libelle = recette ? recette.label : 'une recette';
+  state.revenues = state.revenues.filter(r => r.id !== id);
+  enregistrerAction('a supprimé la recette « ' + libelle + ' »');
+  rendreBudget();
+  rendreAccueil();
+  afficherToast('Recette supprimée.', 'info');
 }
 
 /* --- Main d'œuvre : CRUD (préparation + exécution) --- */
@@ -2835,6 +3413,14 @@ function rendreSync(){
     ${blocProjetActif}
 
     <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px,1fr)); gap:16px; max-width:900px; margin-bottom:20px;">
+      ${!syncProjectId ? `
+        <div class="card" style="padding:22px; border-color:var(--primary-soft);">
+          <i data-lucide="cloud-upload" style="width:24px;height:24px; color:var(--primary); margin-bottom:10px;"></i>
+          <h3 class="font-display" style="font-size:14.5px; font-weight:700; margin:0 0 6px 0;">Synchroniser le projet en cours</h3>
+          <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 14px 0;">Réservé à l'administrateur. Envoie tes données actuelles (sessions, dépenses, tarification...) dans le cloud, sans repartir de zéro.</p>
+          <button class="btn-primary" onclick="demanderMotDePasseAdminEtCreer(false)"><i data-lucide="cloud-upload" style="width:14px;height:14px;"></i> Synchroniser ce projet</button>
+        </div>
+      ` : ''}
       <div class="card" style="padding:22px;">
         <i data-lucide="plus-circle" style="width:24px;height:24px; color:var(--primary); margin-bottom:10px;"></i>
         <h3 class="font-display" style="font-size:14.5px; font-weight:700; margin:0 0 6px 0;">Nouveau projet</h3>
@@ -2869,6 +3455,45 @@ function rendreSync(){
   `;
   rafraichirIcones();
 }
+
+/* =========================================================================
+   SAISIE DÉCIMALE : accepte la virgule comme séparateur, partout dans l'app
+   =========================================================================
+   Les champs <input type="number"> refusent nativement la virgule si le
+   navigateur n'est pas en locale française — la touche est simplement
+   ignorée. On intercepte la frappe (et le collage) pour convertir la
+   virgule en point AVANT que le navigateur ne la rejette, ce qui permet de
+   garder les flèches +/- natives tout en acceptant "24,54" au clavier.
+   Fonctionne sur tous les champs numériques présents ET futurs (délégation
+   sur document, pas besoin de toucher chaque champ individuellement). */
+document.addEventListener('keydown', function(e){
+  if(e.key !== ',' || !e.target.matches('input[type="number"]')) return;
+  const input = e.target;
+  if(String(input.value).includes('.')) { e.preventDefault(); return; } // un seul séparateur décimal
+  e.preventDefault();
+  const debut = input.selectionStart;
+  const fin = input.selectionEnd;
+  const valeurActuelle = input.value || '';
+  input.value = valeurActuelle.slice(0, debut) + '.' + valeurActuelle.slice(fin);
+  input.setSelectionRange(debut + 1, debut + 1);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}, true);
+
+document.addEventListener('paste', function(e){
+  if(!e.target.matches('input[type="number"]')) return;
+  const texteColle = (e.clipboardData || window.clipboardData).getData('text');
+  if(!texteColle || !texteColle.includes(',')) return;
+  e.preventDefault();
+  const input = e.target;
+  const debut = input.selectionStart;
+  const fin = input.selectionEnd;
+  const texteConverti = texteColle.replace(/,/g, '.');
+  const valeurActuelle = input.value || '';
+  input.value = valeurActuelle.slice(0, debut) + texteConverti + valeurActuelle.slice(fin);
+  const nouvellePosition = debut + texteConverti.length;
+  input.setSelectionRange(nouvellePosition, nouvellePosition);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+});
 
 /* =========================================================================
    14. INITIALISATION
