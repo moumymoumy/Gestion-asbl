@@ -1456,8 +1456,9 @@ function calculerTotauxParLibelleEtEleve(){
     };
     eleves.forEach(nom => {
       const cleEleve = normaliserLibelle(nom);
-      if(!groupesLibelle[cleLibelle].eleves[cleEleve]) groupesLibelle[cleLibelle].eleves[cleEleve] = { key: cleEleve, label: nom, heures: 0 };
+      if(!groupesLibelle[cleLibelle].eleves[cleEleve]) groupesLibelle[cleLibelle].eleves[cleEleve] = { key: cleEleve, label: nom, heures: 0, nbSeances: 0 };
       groupesLibelle[cleLibelle].eleves[cleEleve].heures += Number(s.hours) || 0;
+      groupesLibelle[cleLibelle].eleves[cleEleve].nbSeances += 1;
     });
   });
   return Object.values(groupesLibelle)
@@ -1477,10 +1478,14 @@ function obtenirPricingEleve(libelle, eleve){
   };
 }
 
-function calculerRecettePropreEleve(libelle, eleve){
+function calculerRecettePropreEleve(libelle, eleve, nbSeances){
   const pricing = obtenirPricingEleve(libelle, eleve);
-  const prixParParticipant = pricing.mode === 'forfait' ? pricing.forfaitAmount : pricing.unitPrice;
-  return prixParParticipant * pricing.participants;
+  if(pricing.mode === 'forfait'){
+    // Forfait : montant unique par participant, pour l'ENSEMBLE du suivi (toutes les séances).
+    return pricing.forfaitAmount * pricing.participants;
+  }
+  // À l'unité : prix par SÉANCE, donc multiplié par le nombre de séances réellement suivies.
+  return pricing.unitPrice * pricing.participants * (nbSeances || 0);
 }
 
 function mettreAJourPricingEleve(libelle, eleve, champ, valeur){
@@ -1767,29 +1772,47 @@ function calculerRepartitionParLibelleEtEleve(m){
       const coutPreparationSalarieEleve = m.coutPreparationSalarie * part;
       const chargesFixesEleve = depensesGeneralesEleve + coutPreparationSalarieEleve + coutExecutionSalarieEleve;
 
-      const recettesEleve = calculerRecettePropreEleve(groupeLibelle.label, groupeEleve.label);
+      const recettesEleve = calculerRecettePropreEleve(groupeLibelle.label, groupeEleve.label, groupeEleve.nbSeances);
       const resultatEleve = recettesEleve - chargesFixesEleve;
 
-      const prixParParticipant = pricing.mode === 'forfait' ? pricing.forfaitAmount : pricing.unitPrice;
+      // Seuil de rentabilité : en "à l'unité", le prix est par SÉANCE, donc le seuil
+      // s'exprime en nombre de séances (× participants) ; en "forfait", le montant est
+      // déjà pour toute la saison par participant, donc le seuil s'exprime en nombre
+      // de participants.
       let seuilEleve = null;
       let seuilEleveStatut;
-      if(prixParParticipant > 0){
-        seuilEleve = chargesFixesEleve <= 0 ? 0 : Math.ceil(chargesFixesEleve / prixParParticipant);
-        seuilEleveStatut = 'ok';
+      let seuilEleveUnite;
+      if(pricing.mode === 'forfait'){
+        seuilEleveUnite = 'participant';
+        if(pricing.forfaitAmount > 0){
+          seuilEleve = chargesFixesEleve <= 0 ? 0 : Math.ceil(chargesFixesEleve / pricing.forfaitAmount);
+          seuilEleveStatut = 'ok';
+        }else{
+          seuilEleveStatut = 'non_atteignable';
+        }
       }else{
-        seuilEleveStatut = 'non_atteignable';
+        seuilEleveUnite = 'seance';
+        const prixEffectifParSeance = pricing.unitPrice * (pricing.participants || 0);
+        if(prixEffectifParSeance > 0){
+          seuilEleve = chargesFixesEleve <= 0 ? 0 : Math.ceil(chargesFixesEleve / prixEffectifParSeance);
+          seuilEleveStatut = 'ok';
+        }else{
+          seuilEleveStatut = 'non_atteignable';
+        }
       }
 
       return {
         label: groupeEleve.label,
         heures: groupeEleve.heures,
+        nbSeances: groupeEleve.nbSeances,
         chargesFixesEleve,
         totalDepensesReellesEleve: chargesFixesEleve,
         recettesEleve,
         resultatEleve,
         pricing,
         seuilEleve,
-        seuilEleveStatut
+        seuilEleveStatut,
+        seuilEleveUnite
       };
     });
 
@@ -3182,12 +3205,14 @@ function rendreRepartitionElevesSimulateur(m){
 
     const cartes = groupeLibelle.eleves.map(r => {
       const estViableEleve = r.resultatEleve >= 0;
-      let seuilTexte = r.seuilEleveStatut === 'non_atteignable' ? 'Non atteignable' : r.seuilEleve + ' séance(s)';
+      let seuilTexte;
+      if(r.seuilEleveStatut === 'non_atteignable') seuilTexte = 'Non atteignable';
+      else seuilTexte = r.seuilEleve + (r.seuilEleveUnite === 'participant' ? ' participant(s)' : ' séance(s)');
 
       return `
         <div class="card" style="padding:16px; margin-bottom:12px;">
           <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
-            <div style="font-weight:700; font-size:13.5px;">${echapperHtml(r.label)} <span style="font-weight:400; color:var(--ink-soft); font-size:12px;">(${r.heures} h)</span></div>
+            <div style="font-weight:700; font-size:13.5px;">${echapperHtml(r.label)} <span style="font-weight:400; color:var(--ink-soft); font-size:12px;">(${r.heures} h sur ${r.nbSeances} séance${r.nbSeances > 1 ? 's' : ''})</span></div>
             <div style="display:flex; gap:6px;">
               <button type="button" class="btn-secondary btn-pricing-mode-eleve" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-mode="unite" style="padding:6px 12px; font-size:12px; ${r.pricing.mode === 'unite' ? 'background:var(--primary-soft); color:var(--primary-dark); border-color:var(--primary-soft);' : ''}">À l'unité</button>
               <button type="button" class="btn-secondary btn-pricing-mode-eleve" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-mode="forfait" style="padding:6px 12px; font-size:12px; ${r.pricing.mode === 'forfait' ? 'background:var(--primary-soft); color:var(--primary-dark); border-color:var(--primary-soft);' : ''}">Forfait</button>
@@ -3200,10 +3225,10 @@ function rendreRepartitionElevesSimulateur(m){
             </div>
             ${r.pricing.mode === 'forfait' ? `
               <div>
-                <label class="field-label">Montant forfaitaire (€, pour tout le suivi)</label>
+                <label class="field-label">Montant forfaitaire (€, pour l'ensemble des ${r.nbSeances} séances)</label>
                 <input type="number" class="input-field eleve-pricing-input" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-champ="forfaitAmount" min="0" step="1" value="${r.pricing.forfaitAmount}">
                 <p style="font-size:11px; color:var(--ink-soft); margin:6px 0 0 0;">${r.pricing.participants > 0
-                  ? `Prix minimum pour couvrir les charges avec ${r.pricing.participants} participant(s) : <strong class="font-mono-num">${formaterMontant(r.chargesFixesEleve / r.pricing.participants)}</strong>`
+                  ? `Prix minimum pour couvrir les charges avec ${r.pricing.participants} participant(s) : <strong class="font-mono-num">${formaterMontant(r.chargesFixesEleve / r.pricing.participants)}</strong> <span style="color:var(--ink-soft);">(pour toute la saison)</span>`
                   : `Prix minimum pour 1 participant : <strong class="font-mono-num">${formaterMontant(r.chargesFixesEleve)}</strong> <span style="color:var(--ink-soft);">(renseigne le nombre de personnes pour un calcul précis)</span>`
                 }</p>
               </div>
@@ -3211,16 +3236,20 @@ function rendreRepartitionElevesSimulateur(m){
               <div>
                 <label class="field-label">Prix unitaire (€ / séance)</label>
                 <input type="number" class="input-field eleve-pricing-input" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-champ="unitPrice" min="0" step="0.5" value="${r.pricing.unitPrice}">
-                <p style="font-size:11px; color:var(--ink-soft); margin:6px 0 0 0;">${r.pricing.participants > 0
-                  ? `Prix minimum pour couvrir les charges avec ${r.pricing.participants} participant(s) : <strong class="font-mono-num">${formaterMontant(r.chargesFixesEleve / r.pricing.participants)}</strong>`
-                  : `Prix minimum pour 1 participant : <strong class="font-mono-num">${formaterMontant(r.chargesFixesEleve)}</strong> <span style="color:var(--ink-soft);">(renseigne le nombre de personnes pour un calcul précis)</span>`
+                <p style="font-size:11px; color:var(--ink-soft); margin:6px 0 0 0;">${(r.pricing.participants > 0 && r.nbSeances > 0)
+                  ? `Prix minimum par séance pour couvrir les charges (${r.nbSeances} séances, ${r.pricing.participants} participant(s)) : <strong class="font-mono-num">${formaterMontant(r.chargesFixesEleve / (r.pricing.participants * r.nbSeances))}</strong>`
+                  : `Prix minimum par séance (1 participant, 1 séance) : <strong class="font-mono-num">${formaterMontant(r.chargesFixesEleve)}</strong> <span style="color:var(--ink-soft);">(renseigne le nombre de personnes pour un calcul précis)</span>`
                 }</p>
               </div>
             `}
           </div>
           <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px,1fr)); gap:12px; font-size:12.5px; padding-top:12px; border-top:1px solid var(--border);">
             <div><div style="color:var(--ink-soft); margin-bottom:3px;">Dépenses</div><div class="font-mono-num" style="font-weight:700;">${formaterMontant(r.totalDepensesReellesEleve)}</div></div>
-            <div><div style="color:var(--ink-soft); margin-bottom:3px;">Recettes</div><div class="font-mono-num" style="font-weight:700;">${formaterMontant(r.recettesEleve)}</div></div>
+            <div>
+              <div style="color:var(--ink-soft); margin-bottom:3px;">Recettes</div>
+              <div class="font-mono-num" style="font-weight:700;">${formaterMontant(r.recettesEleve)}</div>
+              ${r.pricing.mode === 'unite' ? `<div style="font-size:10.5px; color:var(--ink-soft);">= ${r.pricing.participants} × ${r.nbSeances} séance(s) × ${formaterMontant(r.pricing.unitPrice)}</div>` : ''}
+            </div>
             <div><div style="color:var(--ink-soft); margin-bottom:3px;">Résultat</div><div class="font-mono-num" style="font-weight:700; color:${estViableEleve ? 'var(--success)' : 'var(--danger)'};">${estViableEleve ? '+' : ''}${formaterMontant(r.resultatEleve)}</div></div>
             <div><div style="color:var(--ink-soft); margin-bottom:3px;">Seuil de rentabilité</div><div class="font-mono-num" style="font-weight:700;">${seuilTexte}</div></div>
           </div>
