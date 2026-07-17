@@ -2854,13 +2854,36 @@ function attacherEcouteursGroupesSessions(){
 
 /* --- Édition en ligne du champ Élève directement dans le tableau des sessions,
    sans ouvrir de modale (pratique après une génération de créneaux en lot). --- */
+/* --- Propage un ou plusieurs élèves aux créneaux du même horaire, sur les dates
+   SUIVANTES du même lot, sans jamais écraser un créneau déjà rempli. Renvoie le
+   nombre de sessions mises à jour. --- */
+function propagerElevesSurLot(session, nouveauxEleves){
+  let nbPropagations = 0;
+  if(nouveauxEleves.length === 0 || !session.batchId) return 0;
+  state.executionSessions.forEach(autre => {
+    if(autre.id === session.id) return;
+    if(autre.batchId !== session.batchId) return;
+    if(autre.startTime !== session.startTime) return;
+    if(!(autre.date > session.date)) return; // uniquement les dates suivantes
+    if(obtenirElevesSession(autre).length > 0) return; // jamais écraser un créneau déjà rempli
+    autre.students = nouveauxEleves.slice();
+    delete autre.student;
+    nbPropagations++;
+  });
+  return nbPropagations;
+}
+
 function attacherEcouteursEleveInline(){
   document.querySelectorAll('.champ-eleve-inline').forEach(input => {
     input.addEventListener('change', () => {
       const session = trouverSession(input.dataset.sessionId);
       if(!session) return;
-      session.students = input.value.split(',').map(n => n.trim()).filter(Boolean);
+      const nouveauxEleves = input.value.split(',').map(n => n.trim()).filter(Boolean);
+      session.students = nouveauxEleves;
       delete session.student;
+
+      const nbPropagations = propagerElevesSurLot(session, nouveauxEleves);
+
       planifierSauvegarde();
       // Rafraîchir seulement les totaux/rentabilité par élève, sans reconstruire tout
       // le tableau (on perdrait le focus si l'utilisateur enchaîne les champs).
@@ -2870,6 +2893,9 @@ function attacherEcouteursEleveInline(){
         conteneurEleves.innerHTML = rendreRepartitionElevesSimulateur(m);
         attacherEcouteursPricingEleves();
         attacherEcouteursGroupesEleves();
+      }
+      if(nbPropagations > 0){
+        afficherToast(`Élève(s) aussi appliqué(s) sur ${nbPropagations} date(s) suivante(s) au même horaire.`, 'succes');
       }
       enregistrerAction('a renseigné un élève sur une session (' + formaterDate(session.date) + ')');
     });
@@ -3020,11 +3046,19 @@ function rendreRepartitionElevesSimulateur(m){
               <div>
                 <label class="field-label">Montant forfaitaire (€, pour tout le suivi)</label>
                 <input type="number" class="input-field eleve-pricing-input" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-champ="forfaitAmount" min="0" step="1" value="${r.pricing.forfaitAmount}">
+                <p style="font-size:11px; color:var(--ink-soft); margin:6px 0 0 0;">${r.pricing.participants > 0
+                  ? `Prix minimum pour couvrir les charges avec ${r.pricing.participants} participant(s) : <strong class="font-mono-num">${formaterMontant(r.chargesFixesEleve / r.pricing.participants)}</strong>`
+                  : `Prix minimum pour 1 participant : <strong class="font-mono-num">${formaterMontant(r.chargesFixesEleve)}</strong> <span style="color:var(--ink-soft);">(renseigne le nombre de personnes pour un calcul précis)</span>`
+                }</p>
               </div>
             ` : `
               <div>
                 <label class="field-label">Prix unitaire (€ / séance)</label>
                 <input type="number" class="input-field eleve-pricing-input" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-champ="unitPrice" min="0" step="0.5" value="${r.pricing.unitPrice}">
+                <p style="font-size:11px; color:var(--ink-soft); margin:6px 0 0 0;">${r.pricing.participants > 0
+                  ? `Prix minimum pour couvrir les charges avec ${r.pricing.participants} participant(s) : <strong class="font-mono-num">${formaterMontant(r.chargesFixesEleve / r.pricing.participants)}</strong>`
+                  : `Prix minimum pour 1 participant : <strong class="font-mono-num">${formaterMontant(r.chargesFixesEleve)}</strong> <span style="color:var(--ink-soft);">(renseigne le nombre de personnes pour un calcul précis)</span>`
+                }</p>
               </div>
             `}
           </div>
@@ -3225,8 +3259,12 @@ function enregistrerSession(){
 
   if(editingSessionId){
     const session = trouverSession(editingSessionId);
-    if(session){ session.date = date; session.label = label; session.students = students; delete session.student; session.paid = paid; session.hours = heures; session.startTime = startTime; session.endTime = endTime; }
-    afficherToast('Session modifiée.', 'succes');
+    let nbPropagations = 0;
+    if(session){
+      session.date = date; session.label = label; session.students = students; delete session.student; session.paid = paid; session.hours = heures; session.startTime = startTime; session.endTime = endTime;
+      nbPropagations = propagerElevesSurLot(session, students);
+    }
+    afficherToast('Session modifiée.' + (nbPropagations > 0 ? ` Élève(s) aussi appliqué(s) sur ${nbPropagations} date(s) suivante(s) au même horaire.` : ''), 'succes');
     editingSessionId = null;
     enregistrerAction('a modifié une session d\'exécution (' + date + ')');
   }else{
