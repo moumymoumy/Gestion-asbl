@@ -1317,8 +1317,18 @@ function trouverSession(id){
 }
 
 /* --- Sessions d'exécution : base du prorata --- */
+/* --- Nombre de "jours d'exécution" utilisé pour les modes de calcul prorata
+   (par jour / hebdo / mensuel / annuel) :
+   - Sessions SANS lot (ajoutées à la main, ex. Orchestre/Chœur) : chacune compte pour
+     1 jour, comme avant — comportement historique inchangé.
+   - Sessions AVEC lot (issues de "Générer des créneaux" ou "Créer sur plusieurs
+     dates") : on compte le nombre de DATES CALENDAIRES distinctes, pas le nombre de
+     créneaux — sinon une seule journée avec 7 créneaux compterait pour 7 jours. --- */
 function calculerNbJoursExecution(){
-  return state.executionSessions.length;
+  const sessionsSansLot = state.executionSessions.filter(s => !s.batchId);
+  const sessionsAvecLot = state.executionSessions.filter(s => s.batchId);
+  const datesDistinctesLots = new Set(sessionsAvecLot.map(s => s.date));
+  return sessionsSansLot.length + datesDistinctesLots.size;
 }
 
 function calculerHeuresExecutionTotal(){
