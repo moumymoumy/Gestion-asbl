@@ -2474,9 +2474,16 @@ function rendreBudget(){
         return `
           <tr class="ligne-groupe-date" data-groupe-date-key="${echapperHtml(cleDate)}" style="cursor:pointer;">
             <td colspan="6" style="font-weight:600; padding:8px 16px 8px 34px;">
-              <i data-lucide="${dateOuverte ? 'chevron-down' : 'chevron-right'}" style="width:13px;height:13px; vertical-align:-3px; margin-right:8px; color:var(--ink-soft);"></i>
-              ${formaterDate(date)}
-              <span style="font-weight:400; color:var(--ink-soft); font-size:12px; margin-left:6px;">(${sessionsDate.length} créneau${sessionsDate.length > 1 ? 'x' : ''}, ${totalHeuresDate} h)</span>
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                <span>
+                  <i data-lucide="${dateOuverte ? 'chevron-down' : 'chevron-right'}" style="width:13px;height:13px; vertical-align:-3px; margin-right:8px; color:var(--ink-soft);"></i>
+                  ${formaterDate(date)}
+                  <span style="font-weight:400; color:var(--ink-soft); font-size:12px; margin-left:6px;">(${sessionsDate.length} créneau${sessionsDate.length > 1 ? 'x' : ''}, ${totalHeuresDate} h)</span>
+                </span>
+                <button type="button" class="btn-danger-ghost btn-supprimer-date" data-libelle-key="${echapperHtml(g.key)}" data-date="${echapperHtml(date)}" title="Supprimer cette date entière">
+                  <i data-lucide="trash-2" style="width:15px;height:15px;"></i>
+                </button>
+              </div>
             </td>
           </tr>
           ${dateOuverte ? sessionsDate.map(s => ligneSessionHtml(s)).join('') : ''}
@@ -2850,6 +2857,44 @@ function attacherEcouteursGroupesSessions(){
       rendreBudget();
     });
   });
+  document.querySelectorAll('.btn-supprimer-date').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation(); // n'affecte pas le repli/dépli de la date, ni du libellé
+      supprimerDateComplete(btn.dataset.libelleKey, btn.dataset.date);
+    });
+  });
+}
+
+/* --- Supprime toutes les sessions d'une date précise (au sein d'un libellé donné),
+   sans toucher aux autres dates ni aux autres libellés. Demande confirmation car
+   irréversible (les élèves déjà encodés sur cette date sont perdus). --- */
+function supprimerDateComplete(libelleKey, date){
+  const sessionsConcernees = state.executionSessions.filter(s => {
+    const texteBrut = (s.label && s.label.trim()) ? s.label.trim() : '';
+    const cle = texteBrut ? normaliserLibelle(texteBrut) : '__sans_libelle__';
+    return cle === libelleKey && s.date === date;
+  });
+  if(sessionsConcernees.length === 0) return;
+
+  const utilisees = sessionsConcernees.filter(s => state.labor.some(e => e.sessionId === s.id));
+  if(utilisees.length > 0){
+    afficherToast('Impossible : ' + utilisees.length + ' créneau(x) de cette date sont utilisés dans la main d\'œuvre. Supprime d\'abord ces entrées.', 'erreur');
+    return;
+  }
+
+  const idsAConcernes = new Set(sessionsConcernees.map(s => s.id));
+  ouvrirModalConfirmation(
+    'Supprimer cette date entière ?',
+    `Cela supprimera les ${sessionsConcernees.length} créneau(x) du ${formaterDate(date)} pour ce libellé (y compris les élèves déjà inscrits sur cette date). Les autres dates et les autres libellés ne sont pas affectés.`,
+    'Supprimer la date',
+    () => {
+      state.executionSessions = state.executionSessions.filter(s => !idsAConcernes.has(s.id));
+      enregistrerAction(`a supprimé la date du ${formaterDate(date)} (${sessionsConcernees.length} créneaux)`);
+      rendreBudget();
+      rendreAccueil();
+      afficherToast('Date supprimée (' + sessionsConcernees.length + ' créneau(x)).', 'info');
+    }
+  );
 }
 
 /* --- Édition en ligne du champ Élève directement dans le tableau des sessions,
@@ -3769,6 +3814,37 @@ function ouvrirModalAvertissement(titre, listeElements){
     </div>
   `;
   rafraichirIcones();
+}
+
+/* --- Modale de confirmation générique (Annuler / Confirmer), pour les actions
+   destructrices comme la suppression d'une date entière. --- */
+let actionConfirmationEnAttente = null;
+
+function ouvrirModalConfirmation(titre, message, texteBouton, action){
+  actionConfirmationEnAttente = action;
+  const racine = document.getElementById('modal-root');
+  racine.innerHTML = `
+    <div class="modal-backdrop show" id="modal-confirmation-backdrop">
+      <div class="modal-box">
+        <h3 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 12px 0; display:flex; align-items:center; gap:8px;">
+          <i data-lucide="alert-triangle" style="width:18px;height:18px; color:var(--danger);"></i> ${echapperHtml(titre)}
+        </h3>
+        <p style="font-size:13px; color:var(--ink); margin:0 0 20px 0; line-height:1.5;">${echapperHtml(message)}</p>
+        <div style="display:flex; gap:10px; justify-content:flex-end;">
+          <button class="btn-secondary" onclick="actionConfirmationEnAttente = null; fermerModal();">Annuler</button>
+          <button class="btn-primary" style="background:var(--danger);" onclick="executerActionConfirmee()">${echapperHtml(texteBouton)}</button>
+        </div>
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
+}
+
+function executerActionConfirmee(){
+  const action = actionConfirmationEnAttente;
+  actionConfirmationEnAttente = null;
+  fermerModal();
+  if(action) action();
 }
 
 function appliquerModificationLot(){
