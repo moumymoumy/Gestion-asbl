@@ -737,6 +737,18 @@ function reprendreSyncSiExistant(){
   syncStatus = 'connexion';
   appliquerModeLectureSeule();
   souscrireAuTempsReel();
+  // Reconstitue aussi l'entrée dans la liste "Projets synchronisés" si elle avait été
+  // retirée (le "x" ne fait que masquer le raccourci, la connexion active continue
+  // elle de fonctionner) : sans ça, un projet resté actif pouvait disparaître de la
+  // liste pour toujours après un simple retrait, même par erreur.
+  ajouterOuMettreAJourProjetConnu({
+    projectId: sauvegarde.projectId,
+    nom: (state.project && state.project.name) || 'Projet sans nom',
+    role: sauvegarde.role,
+    editCode: sauvegarde.editCode || null,
+    viewCode: sauvegarde.viewCode || null,
+    lastOpened: new Date().toISOString()
+  });
 }
 
 function mettreAJourStatutSync(){
