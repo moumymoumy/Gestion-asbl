@@ -360,6 +360,10 @@ let editingSessionId = null;
 // Clés (libellés normalisés) des dossiers de sessions actuellement repliés. Vide par
 // défaut = tout est déplié à l'ouverture, comme avant ce regroupement.
 let libellesSessionsReplies = new Set();
+// Sous-dossiers "date" à l'intérieur d'un libellé : ceux-ci sont REPLIÉS par défaut
+// (contrairement aux libellés), donc on retient plutôt ceux qui sont OUVERTS.
+// Clé = libelleKey + '||' + date
+let datesSessionsOuvertes = new Set();
 // Idem pour les dossiers de libellé dans la section Rentabilité par élève.
 let libellesElevesReplies = new Set();
 let editingLaborId = null;
@@ -2452,6 +2456,34 @@ function rendreBudget(){
         </td>
       </tr>
     `).join('');
+
+    /* --- Sous-dossiers par date, repliés par défaut, à l'intérieur du libellé --- */
+    let lignesDates = '';
+    if(estOuvert){
+      const groupesDates = {};
+      g.sessions.forEach(s => {
+        if(!groupesDates[s.date]) groupesDates[s.date] = [];
+        groupesDates[s.date].push(s);
+      });
+      const datesTriees = Object.keys(groupesDates).sort();
+      lignesDates = datesTriees.map(date => {
+        const cleDate = g.key + '||' + date;
+        const sessionsDate = groupesDates[date];
+        const dateOuverte = datesSessionsOuvertes.has(cleDate);
+        const totalHeuresDate = sessionsDate.reduce((s, x) => s + (Number(x.hours) || 0), 0);
+        return `
+          <tr class="ligne-groupe-date" data-groupe-date-key="${echapperHtml(cleDate)}" style="cursor:pointer;">
+            <td colspan="6" style="font-weight:600; padding:8px 16px 8px 34px;">
+              <i data-lucide="${dateOuverte ? 'chevron-down' : 'chevron-right'}" style="width:13px;height:13px; vertical-align:-3px; margin-right:8px; color:var(--ink-soft);"></i>
+              ${formaterDate(date)}
+              <span style="font-weight:400; color:var(--ink-soft); font-size:12px; margin-left:6px;">(${sessionsDate.length} créneau${sessionsDate.length > 1 ? 'x' : ''}, ${totalHeuresDate} h)</span>
+            </td>
+          </tr>
+          ${dateOuverte ? sessionsDate.map(s => ligneSessionHtml(s)).join('') : ''}
+        `;
+      }).join('');
+    }
+
     return `
       <tr class="ligne-groupe-session" data-groupe-key="${echapperHtml(g.key)}" style="cursor:pointer; background:var(--surface-2);">
         <td colspan="6" style="font-weight:700; padding:10px 16px;">
@@ -2460,7 +2492,7 @@ function rendreBudget(){
           <span style="font-weight:400; color:var(--ink-soft); font-size:12px; margin-left:6px;">(${g.sessions.length} session${g.sessions.length > 1 ? 's' : ''}, ${totalHeuresGroupe} h)</span>
         </td>
       </tr>
-      ${estOuvert ? lignesLots + g.sessions.map(s => ligneSessionHtml(s)).join('') : ''}
+      ${estOuvert ? lignesLots + lignesDates : ''}
     `;
   }).join('');
 
@@ -2806,6 +2838,15 @@ function attacherEcouteursGroupesSessions(){
       const cle = ligne.dataset.groupeKey;
       if(libellesSessionsReplies.has(cle)) libellesSessionsReplies.delete(cle);
       else libellesSessionsReplies.add(cle);
+      rendreBudget();
+    });
+  });
+  document.querySelectorAll('.ligne-groupe-date').forEach(ligne => {
+    ligne.addEventListener('click', (e) => {
+      e.stopPropagation(); // évite de re-basculer le dossier de libellé parent
+      const cle = ligne.dataset.groupeDateKey;
+      if(datesSessionsOuvertes.has(cle)) datesSessionsOuvertes.delete(cle);
+      else datesSessionsOuvertes.add(cle);
       rendreBudget();
     });
   });
