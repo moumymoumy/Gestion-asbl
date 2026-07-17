@@ -334,6 +334,7 @@ function creerEtatVide(){
     executionSessions: [],
     labor: [],
     labelPricing: {},
+    studentPricing: {},
     simulator: {
       participants: 50,
       ticketPrice: 20
@@ -356,6 +357,11 @@ let editingMemberId = null;
 let editingExpenseId = null;
 let editingRevenueId = null;
 let editingSessionId = null;
+// Clés (libellés normalisés) des dossiers de sessions actuellement repliés. Vide par
+// défaut = tout est déplié à l'ouverture, comme avant ce regroupement.
+let libellesSessionsReplies = new Set();
+// Idem pour les dossiers de libellé dans la section Rentabilité par élève.
+let libellesElevesReplies = new Set();
 let editingLaborId = null;
 
 /* =========================================================================
@@ -1032,6 +1038,7 @@ function fusionnerAvecEtatVide(donnees){
     executionSessions: Array.isArray(donnees.executionSessions) ? donnees.executionSessions : [],
     labor: Array.isArray(donnees.labor) ? donnees.labor : [],
     labelPricing: (donnees.labelPricing && typeof donnees.labelPricing === 'object' && !Array.isArray(donnees.labelPricing)) ? donnees.labelPricing : {},
+    studentPricing: (donnees.studentPricing && typeof donnees.studentPricing === 'object' && !Array.isArray(donnees.studentPricing)) ? donnees.studentPricing : {},
     simulator: Object.assign({}, base.simulator, donnees.simulator || {}),
     meta: Object.assign({}, base.meta, donnees.meta || {})
   };
@@ -1397,6 +1404,90 @@ function mettreAJourPricingLibelle(label, champ, valeur){
   }
 }
 
+/* --- Regroupe les sessions par élève (cours individuels) : uniquement les sessions
+   où un élève a été renseigné. Même normalisation que pour les libellés. --- */
+/* --- Renvoie la liste des élèves concernés par une session, qu'elle soit individuelle
+   (un seul nom) ou de groupe (plusieurs noms) — avec compatibilité de l'ancien format
+   à champ unique "student". --- */
+function obtenirElevesSession(session){
+  if(Array.isArray(session.students)) return session.students.map(n => (n || '').trim()).filter(Boolean);
+  if(session.student && session.student.trim()) return [session.student.trim()];
+  return [];
+}
+
+function calculerTotauxParEleve(){
+  const groupes = {};
+  state.executionSessions.forEach(s => {
+    obtenirElevesSession(s).forEach(nom => {
+      const cle = normaliserLibelle(nom);
+      if(!groupes[cle]) groupes[cle] = { key: cle, label: nom, heures: 0 };
+      groupes[cle].heures += Number(s.hours) || 0;
+    });
+  });
+  return Object.values(groupes).sort((a,b) => a.label.localeCompare(b.label));
+}
+
+/* --- Regroupe les sessions par libellé, puis par élève à l'intérieur de chaque
+   libellé : un même élève sur deux libellés différents (ex. Piano ET Guitare) a
+   deux rentabilités bien séparées. --- */
+function calculerTotauxParLibelleEtEleve(){
+  const groupesLibelle = {};
+  state.executionSessions.forEach(s => {
+    const eleves = obtenirElevesSession(s);
+    if(eleves.length === 0) return; // pas d'élève sur cette session : ignorée ici
+    const texteLibelle = (s.label && s.label.trim()) ? s.label.trim() : '';
+    const cleLibelle = texteLibelle ? normaliserLibelle(texteLibelle) : '__sans_libelle__';
+    if(!groupesLibelle[cleLibelle]) groupesLibelle[cleLibelle] = {
+      key: cleLibelle, label: cleLibelle === '__sans_libelle__' ? 'Sans libellé' : texteLibelle, eleves: {}
+    };
+    eleves.forEach(nom => {
+      const cleEleve = normaliserLibelle(nom);
+      if(!groupesLibelle[cleLibelle].eleves[cleEleve]) groupesLibelle[cleLibelle].eleves[cleEleve] = { key: cleEleve, label: nom, heures: 0 };
+      groupesLibelle[cleLibelle].eleves[cleEleve].heures += Number(s.hours) || 0;
+    });
+  });
+  return Object.values(groupesLibelle)
+    .map(g => Object.assign({}, g, { eleves: Object.values(g.eleves).sort((a,b) => a.label.localeCompare(b.label)) }))
+    .sort((a,b) => a.label.localeCompare(b.label));
+}
+
+/* --- Tarification propre à chaque élève, PAR LIBELLÉ (un même élève sur deux
+   libellés différents a deux tarifications indépendantes) --- */
+function obtenirPricingEleve(libelle, eleve){
+  const config = state.studentPricing[libelle] && state.studentPricing[libelle][eleve];
+  return {
+    mode: config && config.mode === 'forfait' ? 'forfait' : 'unite',
+    unitPrice: config ? Number(config.unitPrice) || 0 : 0,
+    participants: config ? Number(config.participants) || 0 : 1,
+    forfaitAmount: config ? Number(config.forfaitAmount) || 0 : 0
+  };
+}
+
+function calculerRecettePropreEleve(libelle, eleve){
+  const pricing = obtenirPricingEleve(libelle, eleve);
+  const prixParParticipant = pricing.mode === 'forfait' ? pricing.forfaitAmount : pricing.unitPrice;
+  return prixParParticipant * pricing.participants;
+}
+
+function mettreAJourPricingEleve(libelle, eleve, champ, valeur){
+  if(!state.studentPricing[libelle]) state.studentPricing[libelle] = {};
+  if(!state.studentPricing[libelle][eleve]) state.studentPricing[libelle][eleve] = { mode: 'unite', unitPrice: 0, participants: 1, forfaitAmount: 0 };
+  if(champ === 'mode'){
+    state.studentPricing[libelle][eleve].mode = valeur === 'forfait' ? 'forfait' : 'unite';
+  }else{
+    state.studentPricing[libelle][eleve][champ] = parseFloat(valeur) || 0;
+  }
+  planifierSauvegarde();
+  const m = calculerMetriques();
+  const conteneur = document.getElementById('sim-repartition-eleves');
+  if(conteneur){
+    conteneur.innerHTML = rendreRepartitionElevesSimulateur(m);
+    attacherEcouteursPricingEleves();
+    attacherEcouteursGroupesEleves();
+  }
+}
+
+
 function libelleModeDepense(mode){
   return {
     ponctuel_fixe: 'Ponctuel — montant fixe',
@@ -1624,6 +1715,71 @@ function calculerRepartitionParLibelle(m){
       seuilLabel,
       seuilLabelStatut
     };
+  });
+}
+
+/* --- Rentabilité par élève (cours individuels) : même principe que par libellé, mais
+   sans notion de charge variable par participant (non applicable ici). --- */
+function calculerRepartitionParLibelleEtEleve(m){
+  const groupesLibelle = calculerTotauxParLibelleEtEleve();
+  const heuresTotal = m.heuresExecutionTotal;
+
+  const depensesGeneralesTotal = state.expenses
+    .filter(d => d.mode !== 'par_participant')
+    .reduce((s, d) => s + calculerMontantAttribueDepense(d), 0);
+
+  return groupesLibelle.map(groupeLibelle => {
+    const elevesCalcules = groupeLibelle.eleves.map(groupeEleve => {
+      const part = heuresTotal > 0 ? groupeEleve.heures / heuresTotal : 0;
+      const pricing = obtenirPricingEleve(groupeLibelle.label, groupeEleve.label);
+
+      // Main d'œuvre d'exécution : attribution directe via la session (ce libellé ET cet élève).
+      let coutExecutionSalarieEleve = 0;
+      state.labor.forEach(entree => {
+        if(entree.phase !== 'execution') return;
+        const session = trouverSession(entree.sessionId);
+        if(!session) return;
+        const texteLibelleSession = (session.label && session.label.trim()) ? session.label.trim() : '';
+        const cleLibelleSession = texteLibelleSession ? normaliserLibelle(texteLibelleSession) : '__sans_libelle__';
+        if(cleLibelleSession !== groupeLibelle.key) return;
+        const elevesSession = obtenirElevesSession(session);
+        if(!elevesSession.some(nom => normaliserLibelle(nom) === groupeEleve.key)) return;
+        const membre = trouverMembre(entree.memberId);
+        if(!membre || membre.type !== 'salarie') return;
+        coutExecutionSalarieEleve += (Number(entree.heures) || 0) * (Number(membre.hourlyRate) || 0);
+      });
+
+      const depensesGeneralesEleve = depensesGeneralesTotal * part;
+      const coutPreparationSalarieEleve = m.coutPreparationSalarie * part;
+      const chargesFixesEleve = depensesGeneralesEleve + coutPreparationSalarieEleve + coutExecutionSalarieEleve;
+
+      const recettesEleve = calculerRecettePropreEleve(groupeLibelle.label, groupeEleve.label);
+      const resultatEleve = recettesEleve - chargesFixesEleve;
+
+      const prixParParticipant = pricing.mode === 'forfait' ? pricing.forfaitAmount : pricing.unitPrice;
+      let seuilEleve = null;
+      let seuilEleveStatut;
+      if(prixParParticipant > 0){
+        seuilEleve = chargesFixesEleve <= 0 ? 0 : Math.ceil(chargesFixesEleve / prixParParticipant);
+        seuilEleveStatut = 'ok';
+      }else{
+        seuilEleveStatut = 'non_atteignable';
+      }
+
+      return {
+        label: groupeEleve.label,
+        heures: groupeEleve.heures,
+        chargesFixesEleve,
+        totalDepensesReellesEleve: chargesFixesEleve,
+        recettesEleve,
+        resultatEleve,
+        pricing,
+        seuilEleve,
+        seuilEleveStatut
+      };
+    });
+
+    return { key: groupeLibelle.key, label: groupeLibelle.label, eleves: elevesCalcules };
   });
 }
 
@@ -2222,25 +2378,104 @@ function rendreBudget(){
   const m = calculerMetriques();
 
   /* --- Sessions d'exécution --- */
-  const lignesSessions = state.executionSessions.slice().sort((a,b) => (a.date || '').localeCompare(b.date || '')).map(s => `
+  /* --- Sessions groupées par libellé, sous forme de dossiers repliables (accordéon) --- */
+  function ligneSessionHtml(s){
+    return `
     <tr>
       <td style="font-weight:600;">${formaterDate(s.date)}</td>
       <td>${s.label ? echapperHtml(s.label) : '<span style="color:var(--ink-soft);">—</span>'}</td>
+      <td>
+        <input type="text" class="input-field champ-eleve-inline" data-session-id="${s.id}" list="liste-eleves-existants" placeholder="Élève(s)..." value="${echapperHtml(obtenirElevesSession(s).join(', '))}" style="min-width:130px; font-size:13px; padding:6px 10px;">
+      </td>
       <td class="font-mono-num">${s.startTime && s.endTime ? `${s.startTime}–${s.endTime} <span style="color:var(--ink-soft);">(${Number(s.hours) || 0} h)</span>` : `${Number(s.hours) || 0} h`}</td>
+      <td>
+        <select class="input-field champ-paiement-inline" data-session-id="${s.id}" style="min-width:80px; font-size:13px; padding:6px 10px;">
+          <option value="non" ${!s.paid ? 'selected' : ''}>Non</option>
+          <option value="oui" ${s.paid ? 'selected' : ''}>Oui</option>
+        </select>
+      </td>
       <td style="text-align:right; white-space:nowrap;">
         <button class="btn-edit-ghost" onclick="ouvrirModalSession('${s.id}')" title="Modifier">
           <i data-lucide="pencil" style="width:16px;height:16px;"></i>
+        </button>
+        <button class="btn-edit-ghost" onclick="ouvrirModalDupliquerSession('${s.id}')" title="Dupliquer en créneaux successifs">
+          <i data-lucide="copy-plus" style="width:16px;height:16px;"></i>
         </button>
         <button class="btn-danger-ghost" onclick="supprimerSession('${s.id}')" title="Supprimer">
           <i data-lucide="trash-2" style="width:16px;height:16px;"></i>
         </button>
       </td>
     </tr>
-  `).join('');
+  `;
+  }
+
+  const groupesSessions = {};
+  state.executionSessions.forEach(s => {
+    const texteBrut = (s.label && s.label.trim()) ? s.label.trim() : '';
+    const cle = texteBrut ? normaliserLibelle(texteBrut) : '__sans_libelle__';
+    if(!groupesSessions[cle]) groupesSessions[cle] = { key: cle, label: cle === '__sans_libelle__' ? 'Sans libellé' : texteBrut, sessions: [] };
+    groupesSessions[cle].sessions.push(s);
+  });
+  const groupesSessionsListe = Object.values(groupesSessions).sort((a,b) => a.label.localeCompare(b.label));
+  groupesSessionsListe.forEach(g => g.sessions.sort((a,b) => (a.date || '').localeCompare(b.date || '')));
+
+  /* --- Détecte les lots de créneaux générés ensemble (batchId partagé) dans un groupe --- */
+  function obtenirLotsDansGroupe(sessions){
+    const lots = {};
+    sessions.forEach(s => {
+      if(!s.batchId) return;
+      if(!lots[s.batchId]) lots[s.batchId] = [];
+      lots[s.batchId].push(s);
+    });
+    return Object.entries(lots).map(([batchId, list]) => {
+      const dates = [...new Set(list.map(s => s.date))].sort();
+      const premiereDateSessions = list.filter(s => s.date === dates[0]).sort((a,b) => (a.startTime || '').localeCompare(b.startTime || ''));
+      const nbCreneauxParDate = premiereDateSessions.length;
+      const heureDebut = premiereDateSessions[0] ? (premiereDateSessions[0].startTime || '') : '';
+      const heureFin = premiereDateSessions[nbCreneauxParDate - 1] ? (premiereDateSessions[nbCreneauxParDate - 1].endTime || '') : '';
+      const dureeCreneau = premiereDateSessions[0] ? (Number(premiereDateSessions[0].hours) || 0) : 0;
+      return { batchId, dates, nbCreneauxParDate, heureDebut, heureFin, dureeCreneau };
+    });
+  }
+
+  const lignesSessions = groupesSessionsListe.map(g => {
+    const estOuvert = !libellesSessionsReplies.has(g.key);
+    const totalHeuresGroupe = g.sessions.reduce((s, x) => s + (Number(x.hours) || 0), 0);
+    const lots = estOuvert ? obtenirLotsDansGroupe(g.sessions) : [];
+    const lignesLots = lots.map(lot => `
+      <tr>
+        <td colspan="6" style="padding:6px 16px 10px 34px; background:var(--surface-2);">
+          <span style="font-size:11.5px; color:var(--ink-soft);">Lot généré : ${lot.dates.length} date(s), ${lot.nbCreneauxParDate} créneau(x)/date, ${lot.heureDebut}–${lot.heureFin}</span>
+          <button class="btn-secondary" style="margin-left:10px; padding:4px 10px; font-size:11.5px;" onclick="ouvrirModalModifierLot('${lot.batchId}')">
+            <i data-lucide="clock" style="width:13px;height:13px;"></i> Modifier la plage horaire
+          </button>
+        </td>
+      </tr>
+    `).join('');
+    return `
+      <tr class="ligne-groupe-session" data-groupe-key="${echapperHtml(g.key)}" style="cursor:pointer; background:var(--surface-2);">
+        <td colspan="6" style="font-weight:700; padding:10px 16px;">
+          <i data-lucide="${estOuvert ? 'chevron-down' : 'chevron-right'}" style="width:14px;height:14px; vertical-align:-3px; margin-right:8px; color:var(--ink-soft);"></i>
+          ${echapperHtml(g.label)}
+          <span style="font-weight:400; color:var(--ink-soft); font-size:12px; margin-left:6px;">(${g.sessions.length} session${g.sessions.length > 1 ? 's' : ''}, ${totalHeuresGroupe} h)</span>
+        </td>
+      </tr>
+      ${estOuvert ? lignesLots + g.sessions.map(s => ligneSessionHtml(s)).join('') : ''}
+    `;
+  }).join('');
 
   /* --- Totaux d'heures par libellé --- */
   const totauxLibelles = calculerTotauxParLibelle();
   const lignesTotauxLibelles = totauxLibelles.map(g => `
+    <tr>
+      <td style="font-weight:600;">${echapperHtml(g.label)}</td>
+      <td class="font-mono-num" style="font-weight:700;">${g.heures} h</td>
+    </tr>
+  `).join('');
+
+  /* --- Totaux d'heures par élève --- */
+  const totauxEleves = calculerTotauxParEleve();
+  const lignesTotauxEleves = totauxEleves.map(g => `
     <tr>
       <td style="font-weight:600;">${echapperHtml(g.label)}</td>
       <td class="font-mono-num" style="font-weight:700;">${g.heures} h</td>
@@ -2374,6 +2609,15 @@ function rendreBudget(){
           <i data-lucide="calendar-plus" style="width:15px;height:15px;"></i> Ajouter une session
         </button>
       </div>
+      <div style="margin-bottom:10px; display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+        <button class="btn-secondary" onclick="ouvrirModalGenererCreneaux()">
+          <i data-lucide="layout-grid" style="width:15px;height:15px;"></i> Générer des créneaux
+        </button>
+        <button class="btn-secondary" onclick="ouvrirModalCreerSessionsMultiDates()">
+          <i data-lucide="calendar-range" style="width:15px;height:15px;"></i> Créer sur plusieurs dates
+        </button>
+        <span style="font-size:11.5px; color:var(--ink-soft);">"Générer des créneaux" découpe une plage horaire en tranches le même jour ; "Créer sur plusieurs dates" répète le même cours (libellé, horaire, élève(s)) sur des dates précises que tu choisis</span>
+      </div>
       <div style="display:flex; gap:16px; margin:10px 0 14px 0; font-size:12.5px; color:var(--ink-soft); flex-wrap:wrap;">
         <span><strong style="color:var(--ink);">${m.nbJoursExecution}</strong> jour(s) d'exécution</span>
         <span><strong style="color:var(--ink);">${m.heuresExecutionTotal}</strong> heure(s) au total</span>
@@ -2383,9 +2627,12 @@ function rendreBudget(){
           <p style="font-size:13.5px; margin:0;">Aucune session définie. Ajoute chaque jour ou soirée d'exécution (ex. 10/08/2026 — 4h).</p>
         </div>
       ` : `
+        <datalist id="liste-eleves-existants">
+          ${totauxEleves.map(g => `<option value="${echapperHtml(g.label)}"></option>`).join('')}
+        </datalist>
         <div style="overflow-x:auto;">
           <table class="data-table">
-            <thead><tr><th>Date</th><th>Libellé</th><th>Durée</th><th></th></tr></thead>
+            <thead><tr><th>Date</th><th>Libellé</th><th>Élève</th><th>Durée</th><th>Paiement</th><th></th></tr></thead>
             <tbody>${lignesSessions}</tbody>
           </table>
         </div>
@@ -2396,6 +2643,17 @@ function rendreBudget(){
               <table class="data-table">
                 <thead><tr><th>Libellé</th><th>Total heures</th></tr></thead>
                 <tbody>${lignesTotauxLibelles}</tbody>
+              </table>
+            </div>
+          </div>
+        ` : ''}
+        ${totauxEleves.length > 0 ? `
+          <div style="margin-top:16px; padding-top:16px; border-top:1px solid var(--border);">
+            <h4 class="font-display" style="font-size:13px; font-weight:700; margin:0 0 10px 0;">Total d'heures par élève</h4>
+            <div style="overflow-x:auto;">
+              <table class="data-table">
+                <thead><tr><th>Élève</th><th>Total heures</th></tr></thead>
+                <tbody>${lignesTotauxEleves}</tbody>
               </table>
             </div>
           </div>
@@ -2527,10 +2785,63 @@ function rendreBudget(){
       <div id="sim-repartition-labels">
         ${rendreRepartitionLabelsSimulateur(m)}
       </div>
+
+      <div id="sim-repartition-eleves">
+        ${rendreRepartitionElevesSimulateur(m)}
+      </div>
     </div>
   `;
   rafraichirIcones();
   attacherEcouteursPricingLabels();
+  attacherEcouteursPricingEleves();
+  attacherEcouteursGroupesEleves();
+  attacherEcouteursEleveInline();
+  attacherEcouteursGroupesSessions();
+}
+
+/* --- Replie/déplie un dossier de libellé dans le tableau des sessions --- */
+function attacherEcouteursGroupesSessions(){
+  document.querySelectorAll('.ligne-groupe-session').forEach(ligne => {
+    ligne.addEventListener('click', () => {
+      const cle = ligne.dataset.groupeKey;
+      if(libellesSessionsReplies.has(cle)) libellesSessionsReplies.delete(cle);
+      else libellesSessionsReplies.add(cle);
+      rendreBudget();
+    });
+  });
+}
+
+/* --- Édition en ligne du champ Élève directement dans le tableau des sessions,
+   sans ouvrir de modale (pratique après une génération de créneaux en lot). --- */
+function attacherEcouteursEleveInline(){
+  document.querySelectorAll('.champ-eleve-inline').forEach(input => {
+    input.addEventListener('change', () => {
+      const session = trouverSession(input.dataset.sessionId);
+      if(!session) return;
+      session.students = input.value.split(',').map(n => n.trim()).filter(Boolean);
+      delete session.student;
+      planifierSauvegarde();
+      // Rafraîchir seulement les totaux/rentabilité par élève, sans reconstruire tout
+      // le tableau (on perdrait le focus si l'utilisateur enchaîne les champs).
+      const m = calculerMetriques();
+      const conteneurEleves = document.getElementById('sim-repartition-eleves');
+      if(conteneurEleves){
+        conteneurEleves.innerHTML = rendreRepartitionElevesSimulateur(m);
+        attacherEcouteursPricingEleves();
+        attacherEcouteursGroupesEleves();
+      }
+      enregistrerAction('a renseigné un élève sur une session (' + formaterDate(session.date) + ')');
+    });
+  });
+  document.querySelectorAll('.champ-paiement-inline').forEach(select => {
+    select.addEventListener('change', () => {
+      const session = trouverSession(select.dataset.sessionId);
+      if(!session) return;
+      session.paid = select.value === 'oui';
+      planifierSauvegarde();
+      enregistrerAction('a marqué le paiement d\'une session comme ' + (session.paid ? 'reçu' : 'non reçu') + ' (' + formaterDate(session.date) + ')');
+    });
+  });
 }
 
 function rendreResultatsSimulateur(m){
@@ -2637,6 +2948,108 @@ function attacherEcouteursPricingLabels(){
   });
 }
 
+/* --- Rentabilité par élève : même présentation que par libellé, adaptée au vocabulaire
+   des cours individuels (élève au lieu de participants). --- */
+function rendreRepartitionElevesSimulateur(m){
+  const groupesLibelle = calculerRepartitionParLibelleEtEleve(m);
+  if(groupesLibelle.length === 0) return ''; // rien à afficher tant qu'aucun élève n'est renseigné
+
+  const blocsLibelle = groupesLibelle.map(groupeLibelle => {
+    const estOuvert = !libellesElevesReplies.has(groupeLibelle.key);
+
+    const cartes = groupeLibelle.eleves.map(r => {
+      const estViableEleve = r.resultatEleve >= 0;
+      let seuilTexte = r.seuilEleveStatut === 'non_atteignable' ? 'Non atteignable' : r.seuilEleve + ' séance(s)';
+
+      return `
+        <div class="card" style="padding:16px; margin-bottom:12px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
+            <div style="font-weight:700; font-size:13.5px;">${echapperHtml(r.label)} <span style="font-weight:400; color:var(--ink-soft); font-size:12px;">(${r.heures} h)</span></div>
+            <div style="display:flex; gap:6px;">
+              <button type="button" class="btn-secondary btn-pricing-mode-eleve" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-mode="unite" style="padding:6px 12px; font-size:12px; ${r.pricing.mode === 'unite' ? 'background:var(--primary-soft); color:var(--primary-dark); border-color:var(--primary-soft);' : ''}">À l'unité</button>
+              <button type="button" class="btn-secondary btn-pricing-mode-eleve" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-mode="forfait" style="padding:6px 12px; font-size:12px; ${r.pricing.mode === 'forfait' ? 'background:var(--primary-soft); color:var(--primary-dark); border-color:var(--primary-soft);' : ''}">Forfait</button>
+            </div>
+          </div>
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px,1fr)); gap:10px; margin-bottom:14px;">
+            <div>
+              <label class="field-label">Nombre de personnes (ce cours)</label>
+              <input type="number" class="input-field eleve-pricing-input" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-champ="participants" min="0" step="1" value="${r.pricing.participants}">
+            </div>
+            ${r.pricing.mode === 'forfait' ? `
+              <div>
+                <label class="field-label">Montant forfaitaire (€, pour tout le suivi)</label>
+                <input type="number" class="input-field eleve-pricing-input" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-champ="forfaitAmount" min="0" step="1" value="${r.pricing.forfaitAmount}">
+              </div>
+            ` : `
+              <div>
+                <label class="field-label">Prix unitaire (€ / séance)</label>
+                <input type="number" class="input-field eleve-pricing-input" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-champ="unitPrice" min="0" step="0.5" value="${r.pricing.unitPrice}">
+              </div>
+            `}
+          </div>
+          <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px,1fr)); gap:12px; font-size:12.5px; padding-top:12px; border-top:1px solid var(--border);">
+            <div><div style="color:var(--ink-soft); margin-bottom:3px;">Dépenses</div><div class="font-mono-num" style="font-weight:700;">${formaterMontant(r.totalDepensesReellesEleve)}</div></div>
+            <div><div style="color:var(--ink-soft); margin-bottom:3px;">Recettes</div><div class="font-mono-num" style="font-weight:700;">${formaterMontant(r.recettesEleve)}</div></div>
+            <div><div style="color:var(--ink-soft); margin-bottom:3px;">Résultat</div><div class="font-mono-num" style="font-weight:700; color:${estViableEleve ? 'var(--success)' : 'var(--danger)'};">${estViableEleve ? '+' : ''}${formaterMontant(r.resultatEleve)}</div></div>
+            <div><div style="color:var(--ink-soft); margin-bottom:3px;">Seuil de rentabilité</div><div class="font-mono-num" style="font-weight:700;">${seuilTexte}</div></div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="ligne-groupe-eleve-libelle" data-groupe-eleve-libelle-key="${echapperHtml(groupeLibelle.key)}" style="cursor:pointer; display:flex; align-items:center; gap:8px; padding:10px 6px; margin-bottom:6px; background:var(--surface-2); border-radius:8px;">
+        <i data-lucide="${estOuvert ? 'chevron-down' : 'chevron-right'}" style="width:14px;height:14px; color:var(--ink-soft);"></i>
+        <span style="font-weight:700; font-size:13.5px;">${echapperHtml(groupeLibelle.label)}</span>
+        <span style="font-weight:400; color:var(--ink-soft); font-size:12px;">(${groupeLibelle.eleves.length} élève${groupeLibelle.eleves.length > 1 ? 's' : ''})</span>
+      </div>
+      ${estOuvert ? `<div style="padding-left:6px; margin-bottom:14px;">${cartes}</div>` : ''}
+    `;
+  }).join('');
+
+  return `
+    <div style="margin-top:22px; padding-top:20px; border-top:1px solid var(--border);">
+      <h4 class="font-display" style="font-size:14px; font-weight:700; margin:0 0 4px 0;">Rentabilité par élève</h4>
+      <p style="font-size:11.5px; color:var(--ink-soft); margin:0 0 14px 0;">Regroupée par libellé (dossiers repliables) : un même élève sur deux libellés différents a deux rentabilités bien séparées, chacune avec sa propre tarification (à l'unité ou au forfait).</p>
+      ${blocsLibelle}
+    </div>
+  `;
+}
+
+/* --- Replie/déplie un dossier de libellé dans la section Rentabilité par élève --- */
+function attacherEcouteursGroupesEleves(){
+  document.querySelectorAll('.ligne-groupe-eleve-libelle').forEach(ligne => {
+    ligne.addEventListener('click', () => {
+      const cle = ligne.dataset.groupeEleveLibelleKey;
+      if(libellesElevesReplies.has(cle)) libellesElevesReplies.delete(cle);
+      else libellesElevesReplies.add(cle);
+      const m = calculerMetriques();
+      const conteneur = document.getElementById('sim-repartition-eleves');
+      if(conteneur){
+        conteneur.innerHTML = rendreRepartitionElevesSimulateur(m);
+        rafraichirIcones();
+        attacherEcouteursPricingEleves();
+        attacherEcouteursGroupesEleves();
+      }
+    });
+  });
+}
+
+function attacherEcouteursPricingEleves(){
+  const conteneur = document.getElementById('sim-repartition-eleves');
+  if(!conteneur) return;
+  conteneur.querySelectorAll('.btn-pricing-mode-eleve').forEach(btn => {
+    btn.addEventListener('click', () => {
+      mettreAJourPricingEleve(btn.dataset.libelle, btn.dataset.eleve, 'mode', btn.dataset.mode);
+    });
+  });
+  conteneur.querySelectorAll('.eleve-pricing-input').forEach(input => {
+    input.addEventListener('change', () => {
+      mettreAJourPricingEleve(input.dataset.libelle, input.dataset.eleve, input.dataset.champ, input.value);
+    });
+  });
+}
+
 function ajusterSimulateur(){
   const participants = parseInt(document.getElementById('sim-participants').value, 10) || 0;
   const prix = parseInt(document.getElementById('sim-prix').value, 10) || 0;
@@ -2673,6 +3086,20 @@ function ouvrirModalSession(id){
             <datalist id="liste-libelles-existants">
               ${calculerTotauxParLibelle().filter(g => g.key !== '__sans_libelle__').map(g => `<option value="${echapperHtml(g.label)}"></option>`).join('')}
             </datalist>
+          </div>
+          <div>
+            <label class="field-label">Élève(s) (optionnel — séparez plusieurs noms par une virgule pour un cours de groupe)</label>
+            <input type="text" class="input-field" id="session-student" list="liste-eleves-existants" placeholder="Ex. Julie Dupont, Marc Petit" value="${session ? echapperHtml(obtenirElevesSession(session).join(', ')) : ''}">
+            <datalist id="liste-eleves-existants">
+              ${calculerTotauxParEleve().map(g => `<option value="${echapperHtml(g.label)}"></option>`).join('')}
+            </datalist>
+          </div>
+          <div>
+            <label class="field-label">Paiement</label>
+            <select class="input-field" id="session-paiement">
+              <option value="non" ${!(session && session.paid) ? 'selected' : ''}>Non</option>
+              <option value="oui" ${(session && session.paid) ? 'selected' : ''}>Oui</option>
+            </select>
           </div>
           <div>
             <label class="field-label">Durée</label>
@@ -2740,6 +3167,8 @@ function mettreAJourDureeCalculee(){
 function enregistrerSession(){
   const date = document.getElementById('session-date').value;
   const label = document.getElementById('session-label').value.trim();
+  const students = document.getElementById('session-student').value.split(',').map(n => n.trim()).filter(Boolean);
+  const paid = document.getElementById('session-paiement').value === 'oui';
   const modeManuelActif = document.getElementById('bloc-duree-manuelle').dataset.actif === '1';
   if(!date){ afficherToast('Indique la date de cette session.', 'erreur'); return; }
 
@@ -2755,12 +3184,12 @@ function enregistrerSession(){
 
   if(editingSessionId){
     const session = trouverSession(editingSessionId);
-    if(session){ session.date = date; session.label = label; session.hours = heures; session.startTime = startTime; session.endTime = endTime; }
+    if(session){ session.date = date; session.label = label; session.students = students; delete session.student; session.paid = paid; session.hours = heures; session.startTime = startTime; session.endTime = endTime; }
     afficherToast('Session modifiée.', 'succes');
     editingSessionId = null;
     enregistrerAction('a modifié une session d\'exécution (' + date + ')');
   }else{
-    state.executionSessions.push({ id: genererId(), date, label, hours: heures, startTime, endTime });
+    state.executionSessions.push({ id: genererId(), date, label, students, paid, hours: heures, startTime, endTime });
     afficherToast('Session ajoutée.', 'succes');
     editingSessionId = null;
     enregistrerAction('a ajouté une session d\'exécution (' + date + ')');
@@ -2781,6 +3210,549 @@ function supprimerSession(id){
   rendreBudget();
   rendreAccueil();
   afficherToast('Session supprimée.', 'info');
+}
+
+/* --- Ajoute une durée (en heures) à une heure "HH:MM" et renvoie la nouvelle heure --- */
+function ajouterHeuresAHeure(heureStr, dureeHeures){
+  const [h, m] = heureStr.split(':').map(Number);
+  let totalMinutes = h * 60 + m + Math.round(dureeHeures * 60);
+  totalMinutes = ((totalMinutes % (24 * 60)) + 24 * 60) % (24 * 60); // sécurité passage minuit
+  const hh = String(Math.floor(totalMinutes / 60)).padStart(2, '0');
+  const mm = String(totalMinutes % 60).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+/* --- Dupliquer une session en plusieurs créneaux successifs (aide à la saisie pour les
+   plages fragmentées : ex. plusieurs élèves à la suite le même jour). --- */
+let sessionADupliquerId = null;
+
+function ouvrirModalDupliquerSession(id){
+  sessionADupliquerId = id;
+  const session = trouverSession(id);
+  if(!session) return;
+  const aUnePlage = !!(session.startTime && session.endTime);
+  const racine = document.getElementById('modal-root');
+  racine.innerHTML = `
+    <div class="modal-backdrop show" id="modal-duplication-backdrop">
+      <div class="modal-box">
+        <h3 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 10px 0;">Dupliquer en créneaux successifs</h3>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 16px 0;">
+          Créneau de référence : ${formaterDate(session.date)}${session.label ? ' — ' + echapperHtml(session.label) : ''}, ${aUnePlage ? session.startTime + '–' + session.endTime : (Number(session.hours) || 0) + ' h'}.
+          ${aUnePlage ? 'Chaque nouveau créneau enchaînera à la suite du précédent, même durée.' : 'Chaque nouveau créneau aura la même date, le même libellé et la même durée (pas d\'heure précise à enchaîner).'}
+          Le champ Élève de chaque nouveau créneau reste vide, à remplir ensuite directement dans le tableau.
+        </p>
+        <div>
+          <label class="field-label">Nombre de créneaux supplémentaires à créer</label>
+          <input type="number" class="input-field" id="duplication-nombre" min="1" step="1" value="1">
+        </div>
+        <div style="display:flex; gap:10px; margin-top:20px; justify-content:flex-end;">
+          <button class="btn-secondary" onclick="fermerModal()">Annuler</button>
+          <button class="btn-primary" onclick="enregistrerDuplicationSession()"><i data-lucide="copy-plus" style="width:15px;height:15px;"></i> Créer</button>
+        </div>
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
+  document.getElementById('modal-duplication-backdrop').addEventListener('click', (e) => { if(e.target.id === 'modal-duplication-backdrop') fermerModal(); });
+}
+
+function enregistrerDuplicationSession(){
+  const session = trouverSession(sessionADupliquerId);
+  if(!session){ fermerModal(); return; }
+  const nombre = parseInt(document.getElementById('duplication-nombre').value, 10) || 0;
+  if(nombre <= 0){ afficherToast('Indique au moins 1 créneau à créer.', 'erreur'); return; }
+
+  const aUnePlage = !!(session.startTime && session.endTime);
+  let curseurDebut = session.startTime;
+  const duree = Number(session.hours) || 0;
+
+  for(let i = 0; i < nombre; i++){
+    if(aUnePlage){
+      const nouveauDebut = ajouterHeuresAHeure(curseurDebut, duree);
+      const nouvelleFin = ajouterHeuresAHeure(nouveauDebut, duree);
+      state.executionSessions.push({
+        id: genererId(), date: session.date, label: session.label, students: [],
+        hours: duree, startTime: nouveauDebut, endTime: nouvelleFin
+      });
+      curseurDebut = nouveauDebut;
+    }else{
+      state.executionSessions.push({
+        id: genererId(), date: session.date, label: session.label, students: [],
+        hours: duree, startTime: null, endTime: null
+      });
+    }
+  }
+  enregistrerAction(`a dupliqué une session en ${nombre} créneau(x) supplémentaire(s) (` + formaterDate(session.date) + ')');
+  afficherToast(nombre + ' créneau(x) créé(s). Renseigne l\'élève de chacun dans le tableau.', 'succes');
+  sessionADupliquerId = null;
+  fermerModal();
+  rendreBudget();
+  rendreAccueil();
+}
+
+/* --- Générateur de créneaux : découpe une plage horaire globale (ex. 12h→19h) en
+   plusieurs créneaux d'une durée fixe, en un clic, plutôt que de les créer un par un. --- */
+function ouvrirModalGenererCreneaux(){
+  const racine = document.getElementById('modal-root');
+  racine.innerHTML = `
+    <div class="modal-backdrop show" id="modal-generer-backdrop">
+      <div class="modal-box">
+        <h3 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 6px 0;">Générer des créneaux</h3>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 16px 0;">Découpe une plage horaire en plusieurs créneaux de même durée (ex. samedi 12h→19h en créneaux d'1h = 7 créneaux). Le champ Élève de chacun reste vide, à remplir ensuite dans le tableau.</p>
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <div>
+            <label class="field-label">Date</label>
+            <input type="date" class="input-field" id="generer-date">
+          </div>
+          <div>
+            <label class="field-label">Libellé (optionnel, appliqué à tous les créneaux)</label>
+            <input type="text" class="input-field" id="generer-label" list="liste-libelles-existants" placeholder="Ex. Cours individuels">
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <div>
+              <label class="field-label">Début de la plage</label>
+              <input type="time" class="input-field" id="generer-debut" value="12:00">
+            </div>
+            <div>
+              <label class="field-label">Fin de la plage</label>
+              <input type="time" class="input-field" id="generer-fin" value="19:00">
+            </div>
+          </div>
+          <div>
+            <label class="field-label">Durée de chaque créneau (heures)</label>
+            <input type="number" class="input-field" id="generer-duree" min="0.25" step="0.25" value="1">
+          </div>
+        </div>
+        <div style="display:flex; gap:10px; margin-top:20px; justify-content:flex-end;">
+          <button class="btn-secondary" onclick="fermerModal()">Annuler</button>
+          <button class="btn-primary" onclick="enregistrerGenerationCreneaux()"><i data-lucide="layout-grid" style="width:15px;height:15px;"></i> Générer</button>
+        </div>
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
+  document.getElementById('modal-generer-backdrop').addEventListener('click', (e) => { if(e.target.id === 'modal-generer-backdrop') fermerModal(); });
+}
+
+function enregistrerGenerationCreneaux(){
+  const date = document.getElementById('generer-date').value;
+  const label = document.getElementById('generer-label').value.trim();
+  const debut = document.getElementById('generer-debut').value;
+  const fin = document.getElementById('generer-fin').value;
+  const duree = parseFloat(document.getElementById('generer-duree').value) || 0;
+
+  if(!date){ afficherToast('Indique la date de la plage à découper.', 'erreur'); return; }
+  if(!debut || !fin){ afficherToast('Indique une heure de début et de fin.', 'erreur'); return; }
+  if(duree <= 0){ afficherToast('Indique une durée de créneau supérieure à 0.', 'erreur'); return; }
+
+  const dureeTotale = calculerDureeDepuisPlage(debut, fin);
+  if(dureeTotale <= 0){ afficherToast('La plage horaire est invalide.', 'erreur'); return; }
+
+  const nombreCreneaux = Math.floor((dureeTotale / duree) + 1e-9); // tolérance flottant
+  if(nombreCreneaux < 1){ afficherToast('La durée d\'un créneau est plus grande que la plage indiquée.', 'erreur'); return; }
+
+  const batchId = genererId();
+  let curseur = debut;
+  for(let i = 0; i < nombreCreneaux; i++){
+    const finCreneau = ajouterHeuresAHeure(curseur, duree);
+    state.executionSessions.push({
+      id: genererId(), date, label, students: [], batchId,
+      hours: duree, startTime: curseur, endTime: finCreneau
+    });
+    curseur = finCreneau;
+  }
+
+  const resteNonCouvert = Math.round((dureeTotale - nombreCreneaux * duree) * 100) / 100;
+  afficherToast(
+    nombreCreneaux + ' créneau(x) créé(s)' + (resteNonCouvert > 0 ? ` (${resteNonCouvert} h non couvertes en fin de plage — ajoute un créneau manuel si besoin)` : '') + '.',
+    'succes'
+  );
+  enregistrerAction(`a généré ${nombreCreneaux} créneaux (` + formaterDate(date) + ')');
+  fermerModal();
+  rendreBudget();
+  rendreAccueil();
+}
+
+/* --- Créer des sessions sur plusieurs dates précises : même libellé, même plage
+   horaire, mêmes élève(s), répétés sur une liste de dates choisies (recherche libre,
+   pas une récurrence automatique). --- */
+let datesMultiSession = [];
+
+function ouvrirModalCreerSessionsMultiDates(){
+  datesMultiSession = [];
+  const racine = document.getElementById('modal-root');
+  racine.innerHTML = `
+    <div class="modal-backdrop show" id="modal-multi-dates-backdrop">
+      <div class="modal-box" style="max-width:560px;">
+        <h3 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 6px 0;">Créer des sessions sur plusieurs dates</h3>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 16px 0;">Pour un cours qui revient sur des dates précises (ex. tous les lundis choisis), avec le même libellé, la même plage horaire et le(s) même(s) élève(s). Le champ Élève de chaque session créée pourra toujours être ajusté ensuite au cas par cas.</p>
+
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <div>
+            <label class="field-label">Type de session</label>
+            <div style="display:flex; gap:8px;">
+              <button type="button" class="btn-secondary" id="btn-multi-type-individuel" style="flex:1; justify-content:center;" onclick="basculerTypeSessionMulti('individuel')">Individuel (1 élève)</button>
+              <button type="button" class="btn-secondary" id="btn-multi-type-groupe" style="flex:1; justify-content:center;" onclick="basculerTypeSessionMulti('groupe')">Groupe (plusieurs élèves)</button>
+            </div>
+          </div>
+          <div id="multi-bloc-repartition" style="display:none;">
+            <label style="display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;">
+              <input type="checkbox" id="multi-repartir-creneaux" onchange="basculerRepartitionCreneauxMulti()">
+              Répartir plusieurs élèves en créneaux successifs (1 créneau par élève, répété à l'identique sur chaque date)
+            </label>
+          </div>
+          <div>
+            <label class="field-label">Libellé</label>
+            <input type="text" class="input-field" id="multi-label" list="liste-libelles-existants" placeholder="Ex. Cours de yoga">
+          </div>
+          <div id="multi-bloc-eleve-simple">
+            <label class="field-label" id="multi-eleves-label">Élève (optionnel, appliqué à toutes les dates)</label>
+            <input type="text" class="input-field" id="multi-eleves" list="liste-eleves-existants" placeholder="Ex. Julie Dupont">
+            <p id="multi-eleves-aide" style="font-size:11px; color:var(--ink-soft); margin:6px 0 0 0;"></p>
+          </div>
+          <div id="multi-bloc-eleves-ordonnes" style="display:none;">
+            <label class="field-label">Élèves, dans l'ordre des créneaux (un par ligne ou séparés par une virgule)</label>
+            <textarea class="input-field" id="multi-eleves-ordonnes" rows="3" placeholder="Ex. Julie Dupont&#10;Marc Petit&#10;Sophie Leroy"></textarea>
+            <p style="font-size:11px; color:var(--ink-soft); margin:6px 0 0 0;">S'il y a plus de créneaux que de noms, les créneaux restants sont créés vides — à remplir au fur et à mesure des inscriptions.</p>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <div>
+              <label class="field-label" id="multi-heure-debut-label">Heure de début</label>
+              <input type="time" class="input-field" id="multi-heure-debut" value="14:00">
+            </div>
+            <div>
+              <label class="field-label" id="multi-heure-fin-label">Heure de fin</label>
+              <input type="time" class="input-field" id="multi-heure-fin" value="15:00">
+            </div>
+          </div>
+          <div id="multi-bloc-duree-creneau" style="display:none;">
+            <label class="field-label">Durée de chaque créneau (heures)</label>
+            <input type="number" class="input-field" id="multi-duree-creneau" min="0.25" step="0.25" value="1">
+          </div>
+
+          <div style="padding-top:10px; border-top:1px solid var(--border);">
+            <label class="field-label">Ajouter des dates</label>
+            <div style="display:flex; gap:8px; margin-bottom:8px;">
+              <input type="date" class="input-field" id="multi-date-unique" style="flex:1;">
+              <button type="button" class="btn-secondary" onclick="ajouterDateUniqueMulti()">+ Ajouter</button>
+            </div>
+            <textarea class="input-field" id="multi-dates-texte" rows="2" placeholder="Ou colle plusieurs dates : 10/09/2026, 20/09/2026, 25/10/2026"></textarea>
+            <button type="button" class="btn-secondary" style="margin-top:8px;" onclick="ajouterDatesEnMasseMulti()">+ Ajouter ces dates</button>
+          </div>
+
+          <div>
+            <label class="field-label">Dates sélectionnées (<span id="multi-dates-compteur">0</span>)</label>
+            <div id="multi-dates-liste" style="display:flex; flex-wrap:wrap; gap:6px; min-height:32px;"></div>
+          </div>
+        </div>
+
+        <div style="display:flex; gap:10px; margin-top:20px; justify-content:flex-end;">
+          <button class="btn-secondary" onclick="fermerModal()">Annuler</button>
+          <button class="btn-primary" onclick="enregistrerSessionsMultiDates()"><i data-lucide="calendar-plus" style="width:15px;height:15px;"></i> Créer les sessions</button>
+        </div>
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
+  basculerTypeSessionMulti('individuel');
+  rendreListeDatesMulti();
+  document.getElementById('modal-multi-dates-backdrop').addEventListener('click', (e) => { if(e.target.id === 'modal-multi-dates-backdrop') fermerModal(); });
+}
+
+function basculerTypeSessionMulti(type){
+  const btnIndiv = document.getElementById('btn-multi-type-individuel');
+  const btnGroupe = document.getElementById('btn-multi-type-groupe');
+  const label = document.getElementById('multi-eleves-label');
+  const aide = document.getElementById('multi-eleves-aide');
+  const blocRepartition = document.getElementById('multi-bloc-repartition');
+  const caseRepartition = document.getElementById('multi-repartir-creneaux');
+  btnIndiv.dataset.actif = type === 'individuel' ? '1' : '0';
+  btnGroupe.dataset.actif = type === 'groupe' ? '1' : '0';
+  btnIndiv.style.background = type === 'individuel' ? 'var(--primary-soft)' : 'var(--surface)';
+  btnIndiv.style.color = type === 'individuel' ? 'var(--primary-dark)' : 'var(--ink)';
+  btnGroupe.style.background = type === 'groupe' ? 'var(--primary-soft)' : 'var(--surface)';
+  btnGroupe.style.color = type === 'groupe' ? 'var(--primary-dark)' : 'var(--ink)';
+  if(type === 'individuel'){
+    label.textContent = 'Élève (optionnel, appliqué à toutes les dates)';
+    aide.textContent = '';
+    blocRepartition.style.display = 'block';
+  }else{
+    label.textContent = 'Élèves (optionnel, séparés par des virgules, appliqués à toutes les dates)';
+    aide.textContent = 'Ex. Julie Dupont, Marc Petit, Sophie Leroy';
+    // La répartition en créneaux successifs n'a de sens que pour l'individuel.
+    blocRepartition.style.display = 'none';
+    if(caseRepartition.checked){ caseRepartition.checked = false; basculerRepartitionCreneauxMulti(); }
+  }
+}
+
+/* --- Bascule entre "un seul créneau par date" et "plusieurs créneaux successifs,
+   un élève par créneau, répétés à l'identique sur chaque date" --- */
+function basculerRepartitionCreneauxMulti(){
+  const actif = document.getElementById('multi-repartir-creneaux').checked;
+  document.getElementById('multi-bloc-eleve-simple').style.display = actif ? 'none' : 'block';
+  document.getElementById('multi-bloc-eleves-ordonnes').style.display = actif ? 'block' : 'none';
+  document.getElementById('multi-bloc-duree-creneau').style.display = actif ? 'block' : 'none';
+  document.getElementById('multi-heure-debut-label').textContent = actif ? 'Début de la plage' : 'Heure de début';
+  document.getElementById('multi-heure-fin-label').textContent = actif ? 'Fin de la plage' : 'Heure de fin';
+}
+
+function rendreListeDatesMulti(){
+  const conteneur = document.getElementById('multi-dates-liste');
+  const compteur = document.getElementById('multi-dates-compteur');
+  if(!conteneur) return;
+  compteur.textContent = datesMultiSession.length;
+  conteneur.innerHTML = datesMultiSession.slice().sort().map(d => `
+    <span class="badge" style="background:var(--primary-soft); color:var(--primary-dark); display:inline-flex; align-items:center; gap:6px;">
+      ${formaterDate(d)}
+      <button type="button" data-date-a-retirer="${d}" style="border:none; background:none; cursor:pointer; color:var(--primary-dark); font-weight:700; padding:0; line-height:1;">×</button>
+    </span>
+  `).join('');
+  conteneur.querySelectorAll('[data-date-a-retirer]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      datesMultiSession = datesMultiSession.filter(d => d !== btn.dataset.dateARetirer);
+      rendreListeDatesMulti();
+    });
+  });
+}
+
+function ajouterDateUniqueMulti(){
+  const valeur = document.getElementById('multi-date-unique').value;
+  if(!valeur) return;
+  if(!datesMultiSession.includes(valeur)) datesMultiSession.push(valeur);
+  document.getElementById('multi-date-unique').value = '';
+  rendreListeDatesMulti();
+}
+
+/* --- Convertit un texte de date libre (JJ/MM/AAAA, JJ-MM-AAAA ou AAAA-MM-JJ) en ISO --- */
+function parserDateEnIso(texte){
+  const t = texte.trim();
+  if(!t) return null;
+  if(/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  const m = t.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
+  if(m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+  return null;
+}
+
+function ajouterDatesEnMasseMulti(){
+  const texte = document.getElementById('multi-dates-texte').value;
+  const morceaux = texte.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean);
+  let nbAjoutees = 0, nbInvalides = 0;
+  morceaux.forEach(morceau => {
+    const iso = parserDateEnIso(morceau);
+    if(iso){
+      if(!datesMultiSession.includes(iso)){ datesMultiSession.push(iso); nbAjoutees++; }
+    }else{
+      nbInvalides++;
+    }
+  });
+  document.getElementById('multi-dates-texte').value = '';
+  rendreListeDatesMulti();
+  if(nbInvalides > 0) afficherToast(nbInvalides + ' date(s) non reconnue(s) ignorée(s) (formats acceptés : JJ/MM/AAAA ou AAAA-MM-JJ).', 'erreur');
+  else if(nbAjoutees > 0) afficherToast(nbAjoutees + ' date(s) ajoutée(s).', 'succes');
+}
+
+function enregistrerSessionsMultiDates(){
+  const label = document.getElementById('multi-label').value.trim();
+  const debut = document.getElementById('multi-heure-debut').value;
+  const fin = document.getElementById('multi-heure-fin').value;
+  const repartitionActive = document.getElementById('multi-repartir-creneaux').checked;
+
+  if(datesMultiSession.length === 0){ afficherToast('Ajoute au moins une date.', 'erreur'); return; }
+  if(!debut || !fin){ afficherToast('Indique une heure de début et de fin.', 'erreur'); return; }
+
+  let nombreSessionsCreees = 0;
+  const batchId = genererId();
+
+  if(repartitionActive){
+    // Un créneau par élève, dans l'ordre indiqué, répété à l'identique sur chaque date.
+    const eleves = document.getElementById('multi-eleves-ordonnes').value.split(/[,\n]+/).map(n => n.trim()).filter(Boolean);
+    const dureeCreneau = parseFloat(document.getElementById('multi-duree-creneau').value) || 0;
+    if(dureeCreneau <= 0){ afficherToast('Indique une durée de créneau supérieure à 0.', 'erreur'); return; }
+
+    const dureeTotale = calculerDureeDepuisPlage(debut, fin);
+    if(dureeTotale <= 0){ afficherToast('La plage horaire est invalide.', 'erreur'); return; }
+    const nombreCreneaux = Math.floor((dureeTotale / dureeCreneau) + 1e-9);
+    if(nombreCreneaux < 1){ afficherToast('La durée d\'un créneau est plus grande que la plage indiquée.', 'erreur'); return; }
+
+    datesMultiSession.forEach(date => {
+      let curseur = debut;
+      for(let i = 0; i < nombreCreneaux; i++){
+        const finCreneau = ajouterHeuresAHeure(curseur, dureeCreneau);
+        state.executionSessions.push({
+          id: genererId(), date, label, students: eleves[i] ? [eleves[i]] : [], batchId,
+          hours: dureeCreneau, startTime: curseur, endTime: finCreneau
+        });
+        curseur = finCreneau;
+        nombreSessionsCreees++;
+      }
+    });
+  }else{
+    // Un seul créneau par date, avec le(s) même(s) élève(s) partout.
+    const eleves = document.getElementById('multi-eleves').value.split(',').map(n => n.trim()).filter(Boolean);
+    const duree = calculerDureeDepuisPlage(debut, fin);
+    if(duree <= 0){ afficherToast('La plage horaire est invalide.', 'erreur'); return; }
+
+    datesMultiSession.forEach(date => {
+      state.executionSessions.push({
+        id: genererId(), date, label, students: eleves.slice(), batchId,
+        hours: duree, startTime: debut, endTime: fin
+      });
+      nombreSessionsCreees++;
+    });
+  }
+
+  afficherToast(nombreSessionsCreees + ' session(s) créée(s).', 'succes');
+  enregistrerAction(`a créé ${nombreSessionsCreees} sessions sur plusieurs dates (` + (label || 'sans libellé') + ')');
+  datesMultiSession = [];
+  fermerModal();
+  rendreBudget();
+  rendreAccueil();
+}
+
+/* --- Modifier la plage horaire d'un lot de créneaux déjà généré : réajuste
+   automatiquement le nombre de créneaux sur TOUTES les dates du lot (ajoute des
+   créneaux vides si la plage s'agrandit, retire les créneaux en trop si elle se
+   réduit — en avertissant si des élèves déjà inscrits sont concernés). --- */
+let batchIdEnModification = null;
+
+function ouvrirModalModifierLot(batchId){
+  batchIdEnModification = batchId;
+  const sessionsDuLot = state.executionSessions.filter(s => s.batchId === batchId);
+  if(sessionsDuLot.length === 0){ afficherToast('Ce lot est introuvable (peut-être déjà modifié).', 'erreur'); return; }
+
+  const dates = [...new Set(sessionsDuLot.map(s => s.date))].sort();
+  const premiereDateSessions = sessionsDuLot.filter(s => s.date === dates[0]).sort((a,b) => (a.startTime || '').localeCompare(b.startTime || ''));
+  const heureDebutActuelle = premiereDateSessions[0] ? (premiereDateSessions[0].startTime || '') : '';
+  const heureFinActuelle = premiereDateSessions[premiereDateSessions.length - 1] ? (premiereDateSessions[premiereDateSessions.length - 1].endTime || '') : '';
+  const dureeActuelle = premiereDateSessions[0] ? (Number(premiereDateSessions[0].hours) || 0) : 1;
+
+  const racine = document.getElementById('modal-root');
+  racine.innerHTML = `
+    <div class="modal-backdrop show" id="modal-modifier-lot-backdrop">
+      <div class="modal-box">
+        <h3 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 6px 0;">Modifier la plage horaire du lot</h3>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 16px 0;">Ce lot couvre ${dates.length} date(s), ${premiereDateSessions.length} créneau(x) par date. Le changement s'applique à toutes ces dates : des créneaux vides seront ajoutés si tu élargis la plage, ou retirés si tu la réduis (avec avertissement si un élève est concerné).</p>
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+            <div>
+              <label class="field-label">Début de la plage</label>
+              <input type="time" class="input-field" id="modif-lot-debut" value="${heureDebutActuelle}">
+            </div>
+            <div>
+              <label class="field-label">Fin de la plage</label>
+              <input type="time" class="input-field" id="modif-lot-fin" value="${heureFinActuelle}">
+            </div>
+          </div>
+          <div>
+            <label class="field-label">Durée de chaque créneau (heures)</label>
+            <input type="number" class="input-field" id="modif-lot-duree" min="0.25" step="0.25" value="${dureeActuelle}">
+          </div>
+        </div>
+        <div style="display:flex; gap:10px; margin-top:20px; justify-content:flex-end;">
+          <button class="btn-secondary" onclick="fermerModal()">Annuler</button>
+          <button class="btn-primary" onclick="appliquerModificationLot()"><i data-lucide="clock" style="width:15px;height:15px;"></i> Appliquer à tout le lot</button>
+        </div>
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
+  document.getElementById('modal-modifier-lot-backdrop').addEventListener('click', (e) => { if(e.target.id === 'modal-modifier-lot-backdrop') fermerModal(); });
+}
+
+/* --- Modale d'avertissement simple, à valider par "OK" (contrairement au toast qui
+   disparaît tout seul, utile quand le message contient une liste à lire) --- */
+function ouvrirModalAvertissement(titre, listeElements){
+  const racine = document.getElementById('modal-root');
+  racine.innerHTML = `
+    <div class="modal-backdrop show" id="modal-avertissement-backdrop">
+      <div class="modal-box">
+        <h3 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 14px 0; display:flex; align-items:center; gap:8px;">
+          <i data-lucide="alert-triangle" style="width:18px;height:18px; color:var(--danger);"></i> ${echapperHtml(titre)}
+        </h3>
+        <ul style="font-size:13px; color:var(--ink); margin:0 0 20px 0; padding-left:20px; line-height:1.6;">
+          ${listeElements.map(el => `<li>${echapperHtml(el)}</li>`).join('')}
+        </ul>
+        <div style="display:flex; justify-content:flex-end;">
+          <button class="btn-primary" onclick="fermerModal()">OK, j'ai compris</button>
+        </div>
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
+}
+
+function appliquerModificationLot(){
+  const batchId = batchIdEnModification;
+  const debut = document.getElementById('modif-lot-debut').value;
+  const fin = document.getElementById('modif-lot-fin').value;
+  const duree = parseFloat(document.getElementById('modif-lot-duree').value) || 0;
+
+  if(!debut || !fin){ afficherToast('Indique une heure de début et de fin.', 'erreur'); return; }
+  if(duree <= 0){ afficherToast('Indique une durée de créneau supérieure à 0.', 'erreur'); return; }
+  const dureeTotale = calculerDureeDepuisPlage(debut, fin);
+  if(dureeTotale <= 0){ afficherToast('La plage horaire est invalide.', 'erreur'); return; }
+  const nouveauNombreCreneaux = Math.floor((dureeTotale / duree) + 1e-9);
+  if(nouveauNombreCreneaux < 1){ afficherToast('La durée d\'un créneau est plus grande que la plage indiquée.', 'erreur'); return; }
+
+  const dates = [...new Set(state.executionSessions.filter(s => s.batchId === batchId).map(s => s.date))];
+  const elevesExclus = [];
+  let nbCreneauxAjoutes = 0, nbCreneauxRetires = 0;
+
+  dates.forEach(date => {
+    const sessionsExistantes = state.executionSessions
+      .filter(s => s.batchId === batchId && s.date === date)
+      .sort((a,b) => (a.startTime || '').localeCompare(b.startTime || ''));
+
+    let curseur = debut;
+    const idsAConserver = new Set();
+
+    for(let i = 0; i < nouveauNombreCreneaux; i++){
+      const finCreneau = ajouterHeuresAHeure(curseur, duree);
+      if(sessionsExistantes[i]){
+        // Créneau déjà existant à cet index : on garde son élève/paiement, on met juste à jour l'horaire.
+        sessionsExistantes[i].startTime = curseur;
+        sessionsExistantes[i].endTime = finCreneau;
+        sessionsExistantes[i].hours = duree;
+        idsAConserver.add(sessionsExistantes[i].id);
+      }else{
+        // Nouveau créneau (plage agrandie) : vide.
+        state.executionSessions.push({
+          id: genererId(), date, label: sessionsExistantes[0] ? sessionsExistantes[0].label : '',
+          students: [], batchId, hours: duree, startTime: curseur, endTime: finCreneau
+        });
+        nbCreneauxAjoutes++;
+      }
+      curseur = finCreneau;
+    }
+
+    // Créneaux en trop (plage réduite) : on retire, en signalant les élèves concernés.
+    sessionsExistantes.slice(nouveauNombreCreneaux).forEach(s => {
+      const eleves = obtenirElevesSession(s);
+      if(eleves.length > 0) elevesExclus.push(...eleves.map(nom => `${nom} (${formaterDate(date)} ${s.startTime || ''})`));
+      state.executionSessions = state.executionSessions.filter(x => x.id !== s.id);
+      nbCreneauxRetires++;
+    });
+  });
+
+  let message = `Plage mise à jour sur ${dates.length} date(s).`;
+  if(nbCreneauxAjoutes > 0) message += ` ${nbCreneauxAjoutes} créneau(x) vide(s) ajouté(s).`;
+  if(nbCreneauxRetires > 0) message += ` ${nbCreneauxRetires} créneau(x) retiré(s).`;
+  afficherToast(message, 'succes');
+
+  enregistrerAction(`a modifié la plage horaire d'un lot de créneaux (${dates.length} date(s))`);
+  batchIdEnModification = null;
+  fermerModal();
+  rendreBudget();
+  rendreAccueil();
+
+  // Avertissement à valider explicitement (pas un toast qui disparaît tout seul),
+  // affiché APRÈS la fermeture de la modale et le rafraîchissement de l'écran.
+  if(elevesExclus.length > 0){
+    ouvrirModalAvertissement(
+      'Créneaux réduits : élève(s) exclu(s)',
+      elevesExclus
+    );
+  }
 }
 
 /* --- Dépenses : CRUD avec mode de calcul --- */
