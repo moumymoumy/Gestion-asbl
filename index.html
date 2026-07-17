@@ -2858,8 +2858,8 @@ function attacherEcouteursGroupesSessions(){
    SUIVANTES du même lot, sans jamais écraser un créneau déjà rempli. Renvoie le
    nombre de sessions mises à jour. --- */
 function propagerElevesSurLot(session, nouveauxEleves){
-  let nbPropagations = 0;
-  if(nouveauxEleves.length === 0 || !session.batchId) return 0;
+  const idsAffectes = [];
+  if(nouveauxEleves.length === 0 || !session.batchId) return idsAffectes;
   state.executionSessions.forEach(autre => {
     if(autre.id === session.id) return;
     if(autre.batchId !== session.batchId) return;
@@ -2868,9 +2868,19 @@ function propagerElevesSurLot(session, nouveauxEleves){
     if(obtenirElevesSession(autre).length > 0) return; // jamais écraser un créneau déjà rempli
     autre.students = nouveauxEleves.slice();
     delete autre.student;
-    nbPropagations++;
+    idsAffectes.push(autre.id);
   });
-  return nbPropagations;
+  return idsAffectes;
+}
+
+/* --- Met à jour à l'écran (sans tout re-rendre) les champs Élève déjà visibles qui
+   viennent d'être remplis par la propagation automatique, sinon ils resteraient vides
+   à l'affichage tant que le tableau n'est pas rafraîchi en entier. --- */
+function rafraichirChampsElevesAffiches(idsAffectes, nouveauxEleves){
+  idsAffectes.forEach(id => {
+    const input = document.querySelector(`.champ-eleve-inline[data-session-id="${id}"]`);
+    if(input) input.value = nouveauxEleves.join(', ');
+  });
 }
 
 function attacherEcouteursEleveInline(){
@@ -2882,7 +2892,8 @@ function attacherEcouteursEleveInline(){
       session.students = nouveauxEleves;
       delete session.student;
 
-      const nbPropagations = propagerElevesSurLot(session, nouveauxEleves);
+      const idsAffectes = propagerElevesSurLot(session, nouveauxEleves);
+      rafraichirChampsElevesAffiches(idsAffectes, nouveauxEleves);
 
       planifierSauvegarde();
       // Rafraîchir seulement les totaux/rentabilité par élève, sans reconstruire tout
@@ -2894,8 +2905,8 @@ function attacherEcouteursEleveInline(){
         attacherEcouteursPricingEleves();
         attacherEcouteursGroupesEleves();
       }
-      if(nbPropagations > 0){
-        afficherToast(`Élève(s) aussi appliqué(s) sur ${nbPropagations} date(s) suivante(s) au même horaire.`, 'succes');
+      if(idsAffectes.length > 0){
+        afficherToast(`Élève(s) aussi appliqué(s) sur ${idsAffectes.length} date(s) suivante(s) au même horaire.`, 'succes');
       }
       enregistrerAction('a renseigné un élève sur une session (' + formaterDate(session.date) + ')');
     });
@@ -3259,12 +3270,12 @@ function enregistrerSession(){
 
   if(editingSessionId){
     const session = trouverSession(editingSessionId);
-    let nbPropagations = 0;
+    let idsAffectes = [];
     if(session){
       session.date = date; session.label = label; session.students = students; delete session.student; session.paid = paid; session.hours = heures; session.startTime = startTime; session.endTime = endTime;
-      nbPropagations = propagerElevesSurLot(session, students);
+      idsAffectes = propagerElevesSurLot(session, students);
     }
-    afficherToast('Session modifiée.' + (nbPropagations > 0 ? ` Élève(s) aussi appliqué(s) sur ${nbPropagations} date(s) suivante(s) au même horaire.` : ''), 'succes');
+    afficherToast('Session modifiée.' + (idsAffectes.length > 0 ? ` Élève(s) aussi appliqué(s) sur ${idsAffectes.length} date(s) suivante(s) au même horaire.` : ''), 'succes');
     editingSessionId = null;
     enregistrerAction('a modifié une session d\'exécution (' + date + ')');
   }else{
