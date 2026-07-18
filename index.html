@@ -1543,9 +1543,11 @@ function calculerMontantAttribueDepense(depense){
     case 'ponctuel_jour':
       return montant * nbJours;
     case 'hebdo':
+      // Équivalent exact à (montant × 365/7) ÷ 365 — la division par 7 est déjà précise.
       return (montant / 7) * nbJours;
     case 'mensuel':
-      return (montant / 30) * nbJours;
+      // Base 365 jours exacte : (montant × 12) ÷ 365, soit montant ÷ 30,4167.
+      return (montant * 12 / 365) * nbJours;
     case 'annuel':
       return (montant / 365) * nbJours;
     case 'horaire':
@@ -4138,7 +4140,7 @@ function mettreAJourLabelMontantDepense(){
     ponctuel_fixe: 'Montant fixe, non multiplié par le nombre de jours.',
     ponctuel_jour: 'Ce montant sera multiplié par le nombre de jours d\'exécution.',
     hebdo: 'Le montant hebdomadaire est divisé par 7 puis multiplié par le nombre de jours d\'exécution.',
-    mensuel: 'Le montant mensuel est divisé par 30 puis multiplié par le nombre de jours d\'exécution.',
+    mensuel: 'Le montant mensuel est divisé par 30,4167 (365÷12) puis multiplié par le nombre de jours d\'exécution.',
     annuel: 'Le montant annuel est divisé par 365 puis multiplié par le nombre de jours d\'exécution.',
     horaire: 'Ce tarif horaire est multiplié par le total des heures de toutes les sessions d\'exécution.',
     par_participant: 'Ce montant est multiplié par le nombre de participants du libellé associé (défini dans le Simulateur).'
@@ -4258,7 +4260,7 @@ function mettreAJourLabelMontantRecette(){
     ponctuel_fixe: 'Montant fixe, non multiplié par le nombre de jours.',
     ponctuel_jour: 'Ce montant sera multiplié par le nombre de jours d\'exécution.',
     hebdo: 'Le montant hebdomadaire est divisé par 7 puis multiplié par le nombre de jours d\'exécution.',
-    mensuel: 'Le montant mensuel est divisé par 30 puis multiplié par le nombre de jours d\'exécution.',
+    mensuel: 'Le montant mensuel est divisé par 30,4167 (365÷12) puis multiplié par le nombre de jours d\'exécution.',
     annuel: 'Le montant annuel est divisé par 365 puis multiplié par le nombre de jours d\'exécution.',
     horaire: 'Ce tarif horaire est multiplié par le total des heures de toutes les sessions d\'exécution.'
   };
