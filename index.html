@@ -404,7 +404,8 @@ let syncCode = null;
 let syncRole = null;
 let syncEditCode = null;
 let syncViewCode = null;
-let syncChannel = null;
+let syncChannel = null; // conservé pour compatibilité, plus utilisé (remplacé par le polling sécurisé)
+let syncPollingTimer = null;
 let syncPushTimer = null;
 let syncStatus = 'non-configure';
 
@@ -500,13 +501,12 @@ async function creerProjetSyncAvecDonnees(donnees, nomProjet){
   syncStatus = 'connexion';
   mettreAJourStatutSync();
   try{
-    const { data: ligne, error } = await supabaseClient.from(SYNC_TABLE).insert({
-      edit_code: codeEdition,
-      view_code: codeLecture,
-      data: donnees,
-      updated_at: new Date().toISOString(),
-      updated_by: idClientActuel
-    }).select().single();
+    const { data: ligne, error } = await supabaseClient.rpc('creer_projet_securise', {
+      p_edit_code: codeEdition,
+      p_view_code: codeLecture,
+      p_data: donnees,
+      p_updated_by: idClientActuel
+    });
     if(error) throw error;
 
     state = fusionnerAvecEtatVide(ligne.data);
@@ -520,7 +520,7 @@ async function creerProjetSyncAvecDonnees(donnees, nomProjet){
       projectId: ligne.id, nom: nomProjet, role: 'editeur',
       editCode: codeEdition, viewCode: codeLecture, lastOpened: new Date().toISOString()
     });
-    souscrireAuTempsReel();
+    demarrerPollingSync();
     syncStatus = 'connecte';
     enregistrerAction('a créé le projet « ' + nomProjet + ' »');
     afficherToast('Projet « ' + nomProjet + ' » créé avec succès.', 'succes');
@@ -574,31 +574,29 @@ async function rejoindreCodeSync(code){
   syncStatus = 'connexion';
   mettreAJourStatutSync();
   try{
-    const { data: ligne, error } = await supabaseClient
-      .from(SYNC_TABLE)
-      .select('*')
-      .or('edit_code.eq.' + codePropre + ',view_code.eq.' + codePropre)
-      .maybeSingle();
+    const { data: ligneJson, error } = await supabaseClient.rpc('rejoindre_projet_securise', {
+      p_code: codePropre
+    });
     if(error) throw error;
-    if(!ligne){
+    if(!ligneJson){
       afficherToast("Aucun projet ne correspond à ce code.", 'erreur');
       syncStatus = 'erreur';
       mettreAJourStatutSync();
       return;
     }
-    state = fusionnerAvecEtatVide(ligne.data);
-    syncProjectId = ligne.id;
+    state = fusionnerAvecEtatVide(ligneJson.data);
+    syncProjectId = ligneJson.id;
     syncCode = codePropre;
-    syncRole = (ligne.edit_code === codePropre) ? 'editeur' : 'lecture';
-    syncEditCode = (syncRole === 'editeur') ? ligne.edit_code : null;
-    syncViewCode = ligne.view_code;
-    const nomProjet = (ligne.data && ligne.data.project && ligne.data.project.name) || 'Projet sans nom';
+    syncRole = ligneJson.role;
+    syncEditCode = ligneJson.edit_code || null;
+    syncViewCode = ligneJson.view_code;
+    const nomProjet = (ligneJson.data && ligneJson.data.project && ligneJson.data.project.name) || 'Projet sans nom';
     sauvegarderSyncLocalement();
     ajouterOuMettreAJourProjetConnu({
-      projectId: ligne.id, nom: nomProjet, role: syncRole,
+      projectId: ligneJson.id, nom: nomProjet, role: syncRole,
       editCode: syncEditCode, viewCode: syncViewCode, lastOpened: new Date().toISOString()
     });
-    souscrireAuTempsReel();
+    demarrerPollingSync();
     syncStatus = 'connecte';
     afficherToast(
       syncRole === 'editeur' ? 'Connecté en modification.' : 'Connecté en consultation seule.',
@@ -625,25 +623,28 @@ async function ouvrirProjetSyncDepuisListe(projectId){
   syncStatus = 'connexion';
   mettreAJourStatutSync();
   try{
-    const { data: ligne, error } = await supabaseClient.from(SYNC_TABLE).select('*').eq('id', projectId).maybeSingle();
+    const codeAUtiliser = entree.role === 'editeur' ? entree.editCode : entree.viewCode;
+    const { data: ligneJson, error } = await supabaseClient.rpc('recharger_projet_securise', {
+      p_project_id: projectId, p_code: codeAUtiliser
+    });
     if(error) throw error;
-    if(!ligne){
-      afficherToast("Ce projet n'existe plus en ligne.", 'erreur');
+    if(!ligneJson){
+      afficherToast("Ce projet n'existe plus en ligne, ou le code n'est plus valide.", 'erreur');
       syncStatus = 'erreur';
       mettreAJourStatutSync();
       return;
     }
-    state = fusionnerAvecEtatVide(ligne.data);
-    syncProjectId = ligne.id;
+    state = fusionnerAvecEtatVide(ligneJson.data);
+    syncProjectId = ligneJson.id;
     syncRole = entree.role;
-    syncCode = entree.role === 'editeur' ? entree.editCode : entree.viewCode;
+    syncCode = codeAUtiliser;
     syncEditCode = entree.role === 'editeur' ? entree.editCode : null;
     syncViewCode = entree.viewCode;
     entree.lastOpened = new Date().toISOString();
-    entree.nom = (ligne.data && ligne.data.project && ligne.data.project.name) || entree.nom;
+    entree.nom = (ligneJson.data && ligneJson.data.project && ligneJson.data.project.name) || entree.nom;
     ajouterOuMettreAJourProjetConnu(entree);
     sauvegarderSyncLocalement();
-    souscrireAuTempsReel();
+    demarrerPollingSync();
     syncStatus = 'connecte';
     appliquerModeLectureSeule();
     afficherToast('Projet « ' + entree.nom + ' » ouvert.', 'succes');
@@ -669,7 +670,7 @@ function sauvegarderSyncLocalement(){
 
 /* --- Ferme le projet actuellement ouvert (reste dans la liste, pour rouvrir plus tard) --- */
 function fermerProjetActifSync(){
-  if(syncChannel){ supabaseClient.removeChannel(syncChannel); syncChannel = null; }
+  arreterPollingSync();
   syncProjectId = null; syncCode = null; syncRole = null; syncEditCode = null; syncViewCode = null;
   localStorage.removeItem(SYNC_STORAGE_KEY);
   syncStatus = supabaseEstConfigure() ? 'pret' : 'non-configure';
@@ -679,41 +680,66 @@ function fermerProjetActifSync(){
 }
 
 
-function souscrireAuTempsReel(){
+/* --- Actualisation périodique sécurisée : remplace l'ancien temps réel (qui exigeait
+   une lecture ouverte à tous côté base de données). Toutes les 20 secondes, on
+   redemande les données au serveur EN FOURNISSANT le code — la fonction serveur
+   refuse de répondre si le code ne correspond pas, donc personne ne peut écouter
+   les changements d'un projet sans en connaître le code. Léger délai (jusqu'à 20s)
+   au lieu d'une mise à jour instantanée, en échange d'une vraie fermeture de la lecture. */
+function demarrerPollingSync(){
+  arreterPollingSync();
   if(!supabaseClient || !syncProjectId) return;
-  if(syncChannel) supabaseClient.removeChannel(syncChannel);
-
-  syncChannel = supabaseClient
-    .channel('sync-' + syncProjectId)
-    .on('postgres_changes',
-      { event: 'UPDATE', schema: 'public', table: SYNC_TABLE, filter: 'id=eq.' + syncProjectId },
-      (payload) => {
-        if(payload.new.updated_by === idClientActuel) return;
-        state = fusionnerAvecEtatVide(payload.new.data);
-        rendreTout();
-        afficherToast('Mis à jour depuis un autre appareil.', 'info');
-      }
-    )
-    .subscribe((statut) => {
-      if(statut === 'SUBSCRIBED'){ syncStatus = 'connecte'; }
-      else if(statut === 'CHANNEL_ERROR' || statut === 'TIMED_OUT'){ syncStatus = 'erreur'; }
+  syncPollingTimer = setInterval(async () => {
+    if(!syncProjectId || !supabaseClient) return;
+    const codeAUtiliser = syncEditCode || syncViewCode || syncCode;
+    if(!codeAUtiliser) return;
+    try{
+      const { data: ligneJson, error } = await supabaseClient.rpc('recharger_projet_securise', {
+        p_project_id: syncProjectId, p_code: codeAUtiliser
+      });
+      if(error) throw error;
+      if(!ligneJson) return; // code devenu invalide ou projet supprimé : on ignore ce tour
+      if(ligneJson.updated_by === idClientActuel) return; // c'est notre propre sauvegarde
+      state = fusionnerAvecEtatVide(ligneJson.data);
+      rendreTout();
+      afficherToast('Mis à jour depuis un autre appareil.', 'info');
+      syncStatus = 'connecte';
       mettreAJourStatutSync();
-    });
+    }catch(erreur){
+      console.error(erreur);
+    }
+  }, 20000);
 }
 
-/* --- Envoi vers le cloud : jamais si on est en lecture seule --- */
+function arreterPollingSync(){
+  if(syncPollingTimer){ clearInterval(syncPollingTimer); syncPollingTimer = null; }
+  if(syncChannel && supabaseClient){ try{ supabaseClient.removeChannel(syncChannel); }catch(e){} syncChannel = null; }
+}
+
+/* --- Envoi vers le cloud : jamais si on est en lecture seule (vérification
+   client, en plus de la vérification serveur faite par sauvegarder_projet_securise
+   qui refuse désormais toute écriture sans le bon code d'édition). --- */
 function planifierEnvoiCloud(){
   if(!syncProjectId || !supabaseClient) return;
   if(estLectureSeule()) return; // sécurité côté client : un lecteur n'écrit jamais
   clearTimeout(syncPushTimer);
   syncPushTimer = setTimeout(async () => {
     try{
-      const { error } = await supabaseClient.from(SYNC_TABLE).update({
-        data: state,
-        updated_at: new Date().toISOString(),
-        updated_by: idClientActuel
-      }).eq('id', syncProjectId);
+      const { data: succes, error } = await supabaseClient.rpc('sauvegarder_projet_securise', {
+        p_project_id: syncProjectId,
+        p_edit_code: syncEditCode,
+        p_data: state,
+        p_updated_by: idClientActuel
+      });
       if(error) throw error;
+      if(!succes){
+        // Le code d'édition ne correspond plus (ex. projet supprimé, code invalide) :
+        // la vérification serveur a refusé l'écriture, ce n'était pas possible avant.
+        afficherToast("Échec de la sauvegarde en ligne : code d'édition invalide.", 'erreur');
+        syncStatus = 'erreur';
+        mettreAJourStatutSync();
+        return;
+      }
       syncStatus = 'connecte';
     }catch(erreur){
       console.error(erreur);
@@ -723,7 +749,7 @@ function planifierEnvoiCloud(){
   }, 700);
 }
 
-function reprendreSyncSiExistant(){
+async function reprendreSyncSiExistant(){
   if(!supabaseEstConfigure()) return;
   let sauvegarde = null;
   try{ sauvegarde = JSON.parse(localStorage.getItem(SYNC_STORAGE_KEY) || 'null'); }catch(e){}
@@ -736,7 +762,33 @@ function reprendreSyncSiExistant(){
   syncViewCode = sauvegarde.viewCode || null;
   syncStatus = 'connexion';
   appliquerModeLectureSeule();
-  souscrireAuTempsReel();
+  mettreAJourStatutSync();
+
+  // Récupère des données à jour dès la reconnexion (le cache local peut être ancien),
+  // en fournissant le code — la fonction serveur refuse si le code n'est plus valide.
+  try{
+    const codeAUtiliser = syncEditCode || syncViewCode || syncCode;
+    const { data: ligneJson, error } = await supabaseClient.rpc('recharger_projet_securise', {
+      p_project_id: syncProjectId, p_code: codeAUtiliser
+    });
+    if(error) throw error;
+    if(ligneJson){
+      state = fusionnerAvecEtatVide(ligneJson.data);
+      rendreTout();
+      syncStatus = 'connecte';
+    }else{
+      // Le code n'est plus valide (projet supprimé, ou code changé) : on garde les
+      // dernières données connues localement, mais on ne force pas la déconnexion —
+      // l'utilisateur reste libre de fermer le projet lui-même si besoin.
+      syncStatus = 'erreur';
+    }
+  }catch(erreur){
+    console.error(erreur);
+    syncStatus = 'erreur';
+  }
+  mettreAJourStatutSync();
+  demarrerPollingSync();
+
   // Reconstitue aussi l'entrée dans la liste "Projets synchronisés" si elle avait été
   // retirée (le "x" ne fait que masquer le raccourci, la connexion active continue
   // elle de fonctionner) : sans ça, un projet resté actif pouvait disparaître de la
@@ -749,6 +801,7 @@ function reprendreSyncSiExistant(){
     viewCode: sauvegarde.viewCode || null,
     lastOpened: new Date().toISOString()
   });
+  if(currentView === 'sync') rendreSync();
 }
 
 function mettreAJourStatutSync(){
