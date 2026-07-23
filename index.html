@@ -316,6 +316,8 @@ const STORAGE_STORE_NAME = 'handles';
 const STORAGE_HANDLE_KEY = 'projectFileHandle';
 const PROJECTS_STORE_NAME = 'savedProjects';
 const LOCAL_CACHE_KEY = 'asbl_gestion_local_cache_v1';
+const CHARGES_INDICATIVES_KEY = 'asbl_gestion_charges_indicatives_v1'; // repli local (hors ligne / non lié)
+const CHARGES_SYNC_STORAGE_KEY = 'asbl_charges_sync_v1'; // { id, editCode } une fois lié à un appareil
 
 function creerEtatVide(){
   return {
@@ -1586,6 +1588,324 @@ function libelleModeDepense(mode){
    UNIQUEMENT — les modes Ponctuel, Tarif horaire et Charge variable par
    participant n'ont pas de rythme périodique naturel et sont donc exclus).
    Purement informatif : n'intervient dans AUCUN calcul de rentabilité. --- */
+/* =========================================================================
+   OUTIL : Calculateur de charges indicatif (onglet Synchronisation)
+   =========================================================================
+   Indépendant des projets, mais synchronisable entre appareils via un code
+   dédié (table Supabase séparée, sécurisée dès sa création — aucune règle
+   ouverte, tout passe par des fonctions serveur). Fonctionne aussi hors
+   ligne/non lié : dans ce cas, repli sur une simple sauvegarde locale
+   (ce navigateur uniquement). */
+let chargesIndicatives = [];
+let editingChargeIndicativeId = null;
+let chargesSyncId = null;
+let chargesSyncCode = null;
+let chargesSyncStatus = 'non-lie'; // 'non-lie' | 'connexion' | 'connecte' | 'erreur'
+let chargesSyncPollingTimer = null;
+
+function chargerChargesIndicatives(){
+  try{
+    const brut = localStorage.getItem(CHARGES_INDICATIVES_KEY);
+    chargesIndicatives = brut ? JSON.parse(brut) : [];
+    if(!Array.isArray(chargesIndicatives)) chargesIndicatives = [];
+  }catch(e){
+    chargesIndicatives = [];
+  }
+}
+
+function sauvegarderChargesIndicatives(){
+  try{ localStorage.setItem(CHARGES_INDICATIVES_KEY, JSON.stringify(chargesIndicatives)); }catch(e){}
+}
+
+/* --- Liaison à un appareil : sauvegarde/charge juste {id, editCode} --- */
+function sauvegarderLiaisonChargesSync(){
+  try{ localStorage.setItem(CHARGES_SYNC_STORAGE_KEY, JSON.stringify({ id: chargesSyncId, editCode: chargesSyncCode })); }catch(e){}
+}
+
+/* --- Au démarrage : si une liaison existe déjà sur cet appareil, se reconnecte
+   et récupère les données à jour (le cache local peut être ancien). --- */
+async function reprendreLiaisonChargesSyncSiExistant(){
+  if(!supabaseEstConfigure()) return;
+  let sauvegarde = null;
+  try{ sauvegarde = JSON.parse(localStorage.getItem(CHARGES_SYNC_STORAGE_KEY) || 'null'); }catch(e){}
+  if(!sauvegarde || !sauvegarde.id || !sauvegarde.editCode) return;
+
+  chargesSyncId = sauvegarde.id;
+  chargesSyncCode = sauvegarde.editCode;
+  chargesSyncStatus = 'connexion';
+
+  try{
+    initialiserSupabase();
+    const { data: ligneJson, error } = await supabaseClient.rpc('recharger_charges_indicatives_securise', {
+      p_id: chargesSyncId, p_code: chargesSyncCode
+    });
+    if(error) throw error;
+    if(ligneJson){
+      chargesIndicatives = Array.isArray(ligneJson.data) ? ligneJson.data : [];
+      sauvegarderChargesIndicatives();
+      chargesSyncStatus = 'connecte';
+    }else{
+      chargesSyncStatus = 'erreur'; // code devenu invalide ou entrée supprimée
+    }
+  }catch(erreur){
+    console.error(erreur);
+    chargesSyncStatus = 'erreur';
+  }
+  demarrerPollingCharges();
+  if(currentView === 'sync') rendreZoneChargesIndicatives();
+}
+
+/* --- Première synchronisation : crée l'entrée sur le serveur à partir des
+   charges déjà encodées localement, protégée par le mot de passe administrateur
+   (comme la création d'un projet). --- */
+async function synchroniserChargesIndicativesMaintenant(){
+  if(!supabaseEstConfigure()){ afficherToast("La synchronisation n'est pas encore configurée.", 'erreur'); return; }
+  const saisie = window.prompt("Mot de passe administrateur requis pour synchroniser le calculateur de charges :");
+  if(saisie === null) return;
+  if(saisie !== ADMIN_PASSWORD){
+    afficherToast('Mot de passe administrateur incorrect.', 'erreur');
+    return;
+  }
+  const codeEdition = genererCodeAleatoire();
+  try{
+    initialiserSupabase();
+    const { data: ligneJson, error } = await supabaseClient.rpc('creer_charges_indicatives_securise', {
+      p_edit_code: codeEdition, p_data: chargesIndicatives, p_updated_by: idClientActuel
+    });
+    if(error) throw error;
+    chargesSyncId = ligneJson.id;
+    chargesSyncCode = codeEdition;
+    chargesSyncStatus = 'connecte';
+    sauvegarderLiaisonChargesSync();
+    demarrerPollingCharges();
+    rendreZoneChargesIndicatives();
+    afficherToast('Calculateur synchronisé ! Utilise le code affiché pour le relier sur tes autres appareils.', 'succes');
+  }catch(erreur){
+    console.error(erreur);
+    afficherToast('Erreur lors de la synchronisation.', 'erreur');
+  }
+}
+
+/* --- Relier CET appareil à un calculateur déjà synchronisé ailleurs, via son code --- */
+async function rejoindreChargesIndicativesAvecCode(){
+  if(!supabaseEstConfigure()){ afficherToast("La synchronisation n'est pas encore configurée.", 'erreur'); return; }
+  const champ = document.getElementById('charges-rejoindre-code');
+  const code = (champ ? champ.value : '').trim().toUpperCase();
+  if(!code){ afficherToast('Entre un code.', 'erreur'); return; }
+  try{
+    initialiserSupabase();
+    const { data: ligneJson, error } = await supabaseClient.rpc('rejoindre_charges_indicatives_securise', { p_code: code });
+    if(error) throw error;
+    if(!ligneJson){
+      afficherToast('Aucun calculateur ne correspond à ce code.', 'erreur');
+      return;
+    }
+    chargesSyncId = ligneJson.id;
+    chargesSyncCode = code;
+    chargesIndicatives = Array.isArray(ligneJson.data) ? ligneJson.data : [];
+    sauvegarderChargesIndicatives();
+    sauvegarderLiaisonChargesSync();
+    chargesSyncStatus = 'connecte';
+    demarrerPollingCharges();
+    rendreZoneChargesIndicatives();
+    afficherToast('Calculateur relié avec succès.', 'succes');
+  }catch(erreur){
+    console.error(erreur);
+    afficherToast('Erreur lors de la connexion.', 'erreur');
+  }
+}
+
+/* --- Actualisation périodique sécurisée (mêmes principes que pour les projets) :
+   toutes les 20 secondes, redemande les données EN FOURNISSANT le code. --- */
+function demarrerPollingCharges(){
+  arreterPollingCharges();
+  if(!supabaseClient || !chargesSyncId) return;
+  chargesSyncPollingTimer = setInterval(async () => {
+    if(!chargesSyncId || !supabaseClient) return;
+    try{
+      const { data: ligneJson, error } = await supabaseClient.rpc('recharger_charges_indicatives_securise', {
+        p_id: chargesSyncId, p_code: chargesSyncCode
+      });
+      if(error) throw error;
+      if(!ligneJson) return;
+      if(ligneJson.updated_by === idClientActuel) return; // c'est notre propre sauvegarde
+      chargesIndicatives = Array.isArray(ligneJson.data) ? ligneJson.data : [];
+      sauvegarderChargesIndicatives();
+      if(currentView === 'sync') rendreZoneChargesIndicatives();
+    }catch(erreur){
+      console.error(erreur);
+    }
+  }, 20000);
+}
+
+function arreterPollingCharges(){
+  if(chargesSyncPollingTimer){ clearInterval(chargesSyncPollingTimer); chargesSyncPollingTimer = null; }
+}
+
+/* --- Envoi vers le cloud après chaque ajout/modification/suppression, si lié --- */
+let chargesSyncPushTimer = null;
+function planifierEnvoiChargesCloud(){
+  if(!chargesSyncId || !supabaseClient) return;
+  clearTimeout(chargesSyncPushTimer);
+  chargesSyncPushTimer = setTimeout(async () => {
+    try{
+      const { data: succes, error } = await supabaseClient.rpc('sauvegarder_charges_indicatives_securise', {
+        p_id: chargesSyncId, p_code: chargesSyncCode, p_data: chargesIndicatives, p_updated_by: idClientActuel
+      });
+      if(error) throw error;
+      if(!succes){ afficherToast("Échec de la sauvegarde en ligne du calculateur.", 'erreur'); return; }
+    }catch(erreur){
+      console.error(erreur);
+      afficherToast('Erreur de synchronisation du calculateur.', 'erreur');
+    }
+  }, 700);
+}
+
+/* --- Même règle que la ligne indicative des vraies Dépenses : seuls les modes
+   Hebdomadaire/Mensuel/Annuel ont un rythme périodique, "Ponctuel" est exclu. --- */
+function calculerRythmeChargesIndicatives(){
+  let quotidien = 0;
+  chargesIndicatives.forEach(c => {
+    const montant = Number(c.amount) || 0;
+    if(c.mode === 'hebdo') quotidien += montant / 7;
+    else if(c.mode === 'mensuel') quotidien += (montant * 12) / 365;
+    else if(c.mode === 'annuel') quotidien += montant / 365;
+  });
+  return { quotidien, mensuel: quotidien * (365 / 12), annuel: quotidien * 365 };
+}
+
+function libelleModeChargeIndicative(mode){
+  return { ponctuel_fixe: 'Ponctuel — montant fixe', hebdo: 'Hebdomadaire', mensuel: 'Mensuel', annuel: 'Annuel' }[mode] || mode;
+}
+
+function ouvrirModalChargeIndicative(id){
+  editingChargeIndicativeId = id || null;
+  const charge = editingChargeIndicativeId ? chargesIndicatives.find(c => c.id === editingChargeIndicativeId) : null;
+  const racine = document.getElementById('modal-root');
+  racine.innerHTML = `
+    <div class="modal-backdrop show" id="modal-charge-indicative-backdrop">
+      <div class="modal-box">
+        <h3 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 16px 0;">${charge ? 'Modifier la charge' : 'Ajouter une charge'}</h3>
+        <div style="display:flex; flex-direction:column; gap:12px;">
+          <div>
+            <label class="field-label">Libellé</label>
+            <input type="text" class="input-field" id="charge-indicative-label" placeholder="Ex. Assurance annuelle" value="${charge ? echapperHtml(charge.label) : ''}">
+          </div>
+          <div>
+            <label class="field-label">Mode de calcul</label>
+            <select class="input-field" id="charge-indicative-mode">
+              <option value="ponctuel_fixe" ${charge && charge.mode === 'ponctuel_fixe' ? 'selected' : ''}>Ponctuel — montant fixe</option>
+              <option value="hebdo" ${charge && charge.mode === 'hebdo' ? 'selected' : ''}>Hebdomadaire</option>
+              <option value="mensuel" ${!charge || charge.mode === 'mensuel' ? 'selected' : ''}>Mensuel</option>
+              <option value="annuel" ${charge && charge.mode === 'annuel' ? 'selected' : ''}>Annuel</option>
+            </select>
+          </div>
+          <div>
+            <label class="field-label">Montant (€)</label>
+            <input type="number" class="input-field" id="charge-indicative-montant" min="0" step="0.5" placeholder="0.00" value="${charge ? charge.amount : ''}">
+          </div>
+        </div>
+        <div style="display:flex; gap:10px; margin-top:20px; justify-content:flex-end;">
+          <button class="btn-secondary" onclick="fermerModal()">Annuler</button>
+          <button class="btn-primary" onclick="enregistrerChargeIndicative()"><i data-lucide="check" style="width:15px;height:15px;"></i> ${charge ? 'Enregistrer' : 'Ajouter'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
+  document.getElementById('modal-charge-indicative-backdrop').addEventListener('click', (e) => { if(e.target.id === 'modal-charge-indicative-backdrop') fermerModal(); });
+}
+
+function enregistrerChargeIndicative(){
+  const label = document.getElementById('charge-indicative-label').value.trim();
+  const mode = document.getElementById('charge-indicative-mode').value;
+  const montant = parseFloat(document.getElementById('charge-indicative-montant').value) || 0;
+  if(!label){ afficherToast('Indique un libellé pour cette charge.', 'erreur'); return; }
+
+  if(editingChargeIndicativeId){
+    const charge = chargesIndicatives.find(c => c.id === editingChargeIndicativeId);
+    if(charge){ charge.label = label; charge.mode = mode; charge.amount = montant; }
+  }else{
+    chargesIndicatives.push({ id: genererId(), label, mode, amount: montant });
+  }
+  editingChargeIndicativeId = null;
+  sauvegarderChargesIndicatives();
+  planifierEnvoiChargesCloud();
+  fermerModal();
+  rendreZoneChargesIndicatives();
+  afficherToast('Charge enregistrée.', 'succes');
+}
+
+function supprimerChargeIndicative(id){
+  chargesIndicatives = chargesIndicatives.filter(c => c.id !== id);
+  sauvegarderChargesIndicatives();
+  planifierEnvoiChargesCloud();
+  rendreZoneChargesIndicatives();
+  afficherToast('Charge supprimée.', 'info');
+}
+
+function rendreZoneChargesIndicatives(){
+  const zone = document.getElementById('zone-charges-indicatives');
+  if(!zone) return;
+
+  const lignes = chargesIndicatives.map(c => `
+    <tr>
+      <td style="font-weight:600;">${echapperHtml(c.label)}</td>
+      <td><span class="badge" style="background:var(--primary-soft); color:var(--primary-dark);">${libelleModeChargeIndicative(c.mode)}</span></td>
+      <td class="font-mono-num">${formaterMontant(c.amount)}</td>
+      <td style="text-align:right; white-space:nowrap;">
+        <button class="btn-edit-ghost" onclick="ouvrirModalChargeIndicative('${c.id}')" title="Modifier">
+          <i data-lucide="pencil" style="width:16px;height:16px;"></i>
+        </button>
+        <button class="btn-danger-ghost" onclick="supprimerChargeIndicative('${c.id}')" title="Supprimer">
+          <i data-lucide="trash-2" style="width:16px;height:16px;"></i>
+        </button>
+      </td>
+    </tr>
+  `).join('');
+
+  const rythme = calculerRythmeChargesIndicatives();
+
+  const blocSyncHtml = chargesSyncId ? `
+    <div style="display:flex; align-items:center; flex-wrap:wrap; gap:10px; padding:10px 14px; margin-bottom:14px; background:${chargesSyncStatus === 'connecte' ? 'var(--success-soft)' : 'var(--danger-soft)'}; border-radius:8px;">
+      <div style="font-size:12px; color:${chargesSyncStatus === 'connecte' ? 'var(--success)' : 'var(--danger)'}; font-weight:600;">
+        ${chargesSyncStatus === 'connecte' ? '● Synchronisé' : chargesSyncStatus === 'connexion' ? '● Connexion...' : '● Erreur de synchronisation'}
+        — code de cet appareil : <span class="font-mono-num">${echapperHtml(chargesSyncCode)}</span> (à utiliser sur tes autres appareils)
+      </div>
+    </div>
+  ` : `
+    <div style="display:flex; align-items:center; flex-wrap:wrap; gap:10px; padding:10px 14px; margin-bottom:14px; background:var(--surface-2); border-radius:8px;">
+      <span style="font-size:12px; color:var(--ink-soft); flex:1 1 auto; min-width:200px;">Non synchronisé — visible sur cet appareil uniquement.</span>
+      <button class="btn-secondary" style="padding:6px 12px; font-size:12px;" onclick="synchroniserChargesIndicativesMaintenant()">Synchroniser maintenant</button>
+      <input type="text" id="charges-rejoindre-code" placeholder="Code" style="width:90px; padding:6px 8px; font-size:12px; border:1px solid var(--border); border-radius:6px; text-transform:uppercase;" maxlength="6">
+      <button class="btn-secondary" style="padding:6px 12px; font-size:12px;" onclick="rejoindreChargesIndicativesAvecCode()">Rejoindre</button>
+    </div>
+  `;
+
+  zone.innerHTML = `
+    ${blocSyncHtml}
+    ${chargesIndicatives.length === 0 ? `
+      <div style="text-align:center; padding:20px 10px; color:var(--ink-soft);">
+        <p style="font-size:13px; margin:0;">Aucune charge encodée pour l'instant.</p>
+      </div>
+    ` : `
+      <div style="overflow-x:auto;">
+        <table class="data-table">
+          <thead><tr><th>Libellé</th><th>Mode de calcul</th><th>Montant</th><th></th></tr></thead>
+          <tbody>${lignes}</tbody>
+        </table>
+      </div>
+      <div style="margin-top:14px; padding:12px 14px; background:var(--surface-2); border-radius:8px; font-size:12px; color:var(--ink-soft);">
+        <strong style="color:var(--ink);">À titre indicatif</strong> (hebdomadaire/mensuel/annuel uniquement, hors ponctuel) — ce rythme de charges représente environ
+        <strong class="font-mono-num" style="color:var(--ink);">${formaterMontant(rythme.quotidien)}</strong>/jour, soit
+        <strong class="font-mono-num" style="color:var(--ink);">${formaterMontant(rythme.mensuel)}</strong>/mois, soit
+        <strong class="font-mono-num" style="color:var(--ink);">${formaterMontant(rythme.annuel)}</strong>/an.
+      </div>
+    `}
+  `;
+  rafraichirIcones();
+}
+
 function calculerRythmeDepensesRecurrentes(){
   let quotidien = 0;
   let nbDepensesConcernees = 0;
@@ -4785,13 +5105,27 @@ function rendreSync(){
   if(!supabaseEstConfigure()){
     conteneur.innerHTML = `
       <h1 class="font-display" style="font-size:22px; font-weight:700; margin:0 0 6px 0;">Synchronisation</h1>
-      <div class="card" style="padding:22px; background:var(--accent-soft); border:none;">
+      <div class="card" style="padding:22px; background:var(--accent-soft); border:none; margin-bottom:20px;">
         <div style="font-size:13.5px; color:#8a6100; font-weight:600;">
           La synchronisation entre appareils n'est pas encore configurée pour cette installation.
           Suis le guide de configuration Supabase fourni pour l'activer.
         </div>
       </div>
+      <div class="card" style="padding:22px; margin-bottom:20px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; flex-wrap:wrap; gap:10px;">
+          <div>
+            <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0;">Calculateur de charges (indicatif)</h3>
+            <p style="font-size:12px; color:var(--ink-soft); margin:2px 0 0 0;">Outil indépendant, sans lien avec un projet ni avec Supabase — encode librement quelques charges pour estimer un rythme quotidien/mensuel/annuel. Sauvegardé uniquement sur cet appareil.</p>
+          </div>
+          <button class="btn-primary" onclick="ouvrirModalChargeIndicative()">
+            <i data-lucide="plus" style="width:15px;height:15px;"></i> Ajouter une charge
+          </button>
+        </div>
+        <div id="zone-charges-indicatives" style="margin-top:14px;"></div>
+      </div>
     `;
+    rafraichirIcones();
+    rendreZoneChargesIndicatives();
     return;
   }
 
@@ -4918,6 +5252,19 @@ function rendreSync(){
       </div>
     </div>
 
+    <div class="card" style="padding:22px; margin-bottom:20px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px; flex-wrap:wrap; gap:10px;">
+        <div>
+          <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0;">Calculateur de charges (indicatif)</h3>
+          <p style="font-size:12px; color:var(--ink-soft); margin:2px 0 0 0;">Outil indépendant, sans lien avec un projet — encode librement quelques charges pour estimer un rythme quotidien/mensuel/annuel. Sauvegardé uniquement sur cet appareil.</p>
+        </div>
+        <button class="btn-primary" onclick="ouvrirModalChargeIndicative()">
+          <i data-lucide="plus" style="width:15px;height:15px;"></i> Ajouter une charge
+        </button>
+      </div>
+      <div id="zone-charges-indicatives" style="margin-top:14px;"></div>
+    </div>
+
     <div class="card" style="padding:22px; margin-bottom:20px; display:none;" id="carte-totaux-projets">
       <div id="zone-totaux-projets"></div>
     </div>
@@ -4929,6 +5276,7 @@ function rendreSync(){
     </div>
   `;
   rafraichirIcones();
+  rendreZoneChargesIndicatives();
 }
 
 /* --- Calcule les Dépenses/Recettes attribuées de CHAQUE projet de la liste "Projets
@@ -5120,6 +5468,8 @@ document.addEventListener('paste', function(e){
    ========================================================================= */
 document.addEventListener('DOMContentLoaded', async () => {
   rafraichirIcones();
+  chargerChargesIndicatives();
+  reprendreLiaisonChargesSyncSiExistant();
 
   document.querySelectorAll('.nav-item').forEach(el => {
     el.addEventListener('click', () => naviguerVers(el.dataset.view));
