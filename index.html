@@ -1582,6 +1582,27 @@ function libelleModeDepense(mode){
 }
 
 /* --- Dépenses : calcul du montant attribué au projet selon le mode choisi --- */
+/* --- Rythme indicatif des dépenses récurrentes (Hebdomadaire/Mensuel/Annuel
+   UNIQUEMENT — les modes Ponctuel, Tarif horaire et Charge variable par
+   participant n'ont pas de rythme périodique naturel et sont donc exclus).
+   Purement informatif : n'intervient dans AUCUN calcul de rentabilité. --- */
+function calculerRythmeDepensesRecurrentes(){
+  let quotidien = 0;
+  let nbDepensesConcernees = 0;
+  state.expenses.forEach(d => {
+    const montant = Number(d.amount) || 0;
+    if(d.mode === 'hebdo'){ quotidien += montant / 7; nbDepensesConcernees++; }
+    else if(d.mode === 'mensuel'){ quotidien += (montant * 12) / 365; nbDepensesConcernees++; }
+    else if(d.mode === 'annuel'){ quotidien += montant / 365; nbDepensesConcernees++; }
+  });
+  return {
+    quotidien,
+    mensuel: quotidien * (365 / 12),
+    annuel: quotidien * 365,
+    nbDepensesConcernees
+  };
+}
+
 function calculerMontantAttribueDepense(depense){
   const montant = Number(depense.amount) || 0;
   const nbJours = calculerNbJoursExecution();
@@ -2848,6 +2869,18 @@ function rendreBudget(){
             <tbody>${lignesDepenses}</tbody>
           </table>
         </div>
+        ${(() => {
+          const rythme = calculerRythmeDepensesRecurrentes();
+          if(rythme.nbDepensesConcernees === 0) return '';
+          return `
+            <div style="margin-top:14px; padding:12px 14px; background:var(--surface-2); border-radius:8px; font-size:12px; color:var(--ink-soft);">
+              <strong style="color:var(--ink);">À titre indicatif</strong> (hebdomadaire/mensuel/annuel uniquement, hors ponctuel et tarif horaire) — ce rythme de charges représente environ
+              <strong class="font-mono-num" style="color:var(--ink);">${formaterMontant(rythme.quotidien)}</strong>/jour, soit
+              <strong class="font-mono-num" style="color:var(--ink);">${formaterMontant(rythme.mensuel)}</strong>/mois, soit
+              <strong class="font-mono-num" style="color:var(--ink);">${formaterMontant(rythme.annuel)}</strong>/an. N'intervient dans aucun calcul de rentabilité.
+            </div>
+          `;
+        })()}
       `}
     </div>
 
