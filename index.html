@@ -2622,6 +2622,37 @@ function fermerModal(){
   document.getElementById('modal-root').innerHTML = '';
 }
 
+/* --- Historique complet des actions (jusqu'à 200, contre 5 affichées en continu).
+   Les données viennent de state.meta.journal, donc déjà sécurisées et synchronisées
+   exactement comme le reste du projet — rien de spécifique à faire ici. --- */
+function ouvrirModalHistoriqueJournal(){
+  const journalComplet = state.meta.journal || [];
+  const racine = document.getElementById('modal-root');
+  racine.innerHTML = `
+    <div class="modal-backdrop show" id="modal-historique-journal-backdrop">
+      <div class="modal-box" style="max-width:560px;">
+        <h3 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 4px 0;">Historique des actions</h3>
+        <p style="font-size:12px; color:var(--ink-soft); margin:0 0 16px 0;">${journalComplet.length} action${journalComplet.length > 1 ? 's' : ''} enregistrée${journalComplet.length > 1 ? 's' : ''} (200 maximum conservées).</p>
+        <div style="max-height:420px; overflow-y:auto; padding-right:4px;">
+          ${journalComplet.length === 0 ? `
+            <p style="font-size:13px; color:var(--ink-soft); margin:0;">Aucune activité enregistrée pour l'instant.</p>
+          ` : journalComplet.map(entree => `
+            <div style="display:flex; justify-content:space-between; gap:10px; padding:9px 0; border-bottom:1px solid var(--border); font-size:12.5px;">
+              <div><strong>${echapperHtml(entree.auteur)}</strong> ${echapperHtml(entree.action)}</div>
+              <div style="color:var(--ink-soft); white-space:nowrap;">${formaterDate(entree.date)} ${formaterHeure(new Date(entree.date))}</div>
+            </div>
+          `).join('')}
+        </div>
+        <div style="display:flex; justify-content:flex-end; margin-top:18px;">
+          <button class="btn-secondary" onclick="fermerModal()">Fermer</button>
+        </div>
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
+  document.getElementById('modal-historique-journal-backdrop').addEventListener('click', (e) => { if(e.target.id === 'modal-historique-journal-backdrop') fermerModal(); });
+}
+
 /* =========================================================================
    10. RENDU — MODULE GESTION DES TÂCHES
    ========================================================================= */
@@ -5135,7 +5166,7 @@ function rendreSync(){
   /* --- Bloc "projet actuellement ouvert" (s'il y en a un) --- */
   let blocProjetActif = '';
   if(syncProjectId){
-    const journal = (state.meta.journal || []).slice(0, 15);
+    const journal = (state.meta.journal || []).slice(0, 5);
     const journalHtml = journal.length === 0
       ? `<p style="font-size:12.5px; color:var(--ink-soft); margin:0;">Aucune activité enregistrée pour l'instant.</p>`
       : journal.map(entree => `
@@ -5175,7 +5206,14 @@ function rendreSync(){
           </button>
         </div>
         <div class="card" style="padding:24px;">
-          <h3 class="font-display" style="font-size:14.5px; font-weight:700; margin:0 0 12px 0;">Journal d'activité récent</h3>
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+            <h3 class="font-display" style="font-size:14.5px; font-weight:700; margin:0;">Journal d'activité récent</h3>
+            ${(state.meta.journal || []).length > 5 ? `
+              <button onclick="ouvrirModalHistoriqueJournal()" style="background:none; border:none; color:var(--primary); font-size:12px; font-weight:600; cursor:pointer; padding:2px 0;">
+                Historique des actions
+              </button>
+            ` : ''}
+          </div>
           ${journalHtml}
         </div>
       </div>
