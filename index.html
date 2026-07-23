@@ -4918,23 +4918,39 @@ function calculerTotauxProjetDepuisData(donneesProjet){
   state = fusionnerAvecEtatVide(donneesProjet);
   try{
     const m = calculerMetriques();
-    const groupesEleves = calculerRepartitionParLibelleEtEleve(m);
-    const nbElevesTotal = groupesEleves.reduce((s, g) => s + g.eleves.length, 0);
+    const groupesEleves = calculerRepartitionParLibelleEtEleve(m); // uniquement les libellés AVEC au moins un élève
+    const groupesLibelles = calculerRepartitionParLibelle(m); // TOUS les libellés, avec ou sans élève
 
-    if(nbElevesTotal > 0){
-      const depenses = groupesEleves.reduce((s, g) => s + g.eleves.reduce((s2, r) => s2 + r.totalDepensesReellesEleve, 0), 0);
-      const recettes = groupesEleves.reduce((s, g) => s + g.eleves.reduce((s2, r) => s2 + r.recettesEleve, 0), 0);
-      return { depenses, recettes, source: 'élèves' };
+    const clesLibellesAvecEleves = new Set(groupesEleves.map(g => g.key));
+    let depenses = 0, recettes = 0;
+    const sourcesUtilisees = [];
+
+    // Part "élèves" : chaque libellé qui a au moins un élève renseigné.
+    if(groupesEleves.length > 0){
+      depenses += groupesEleves.reduce((s, g) => s + g.eleves.reduce((s2, r) => s2 + r.totalDepensesReellesEleve, 0), 0);
+      recettes += groupesEleves.reduce((s, g) => s + g.eleves.reduce((s2, r) => s2 + r.recettesEleve, 0), 0);
+      sourcesUtilisees.push('élèves');
     }
 
-    const groupesLibelles = calculerRepartitionParLibelle(m);
+    // Part "libellés" : uniquement les libellés qui N'ONT PAS d'élève (pour ne jamais
+    // compter deux fois les mêmes charges/recettes) — à condition que le résumé "par
+    // libellé" soit lui-même actif dans ce projet (2 libellés ou plus au total).
     if(groupesLibelles.length >= 2){
-      const depenses = groupesLibelles.reduce((s, r) => s + r.totalDepensesReellesLabel, 0);
-      const recettes = groupesLibelles.reduce((s, r) => s + r.recettesLabel, 0);
-      return { depenses, recettes, source: 'libellés' };
+      const libellesSansEleve = groupesLibelles.filter(r => !clesLibellesAvecEleves.has(normaliserLibelle(r.label)));
+      if(libellesSansEleve.length > 0){
+        depenses += libellesSansEleve.reduce((s, r) => s + r.totalDepensesReellesLabel, 0);
+        recettes += libellesSansEleve.reduce((s, r) => s + r.recettesLabel, 0);
+        sourcesUtilisees.push('libellés');
+      }
     }
 
-    return { depenses: m.depensesProrateesTotal, recettes: m.recettesProrateesTotal, source: 'classique' };
+    // Repli classique : rien d'exploitable dans les deux résumés ci-dessus
+    // (aucun élève nulle part, et pas 2 libellés ou plus).
+    if(sourcesUtilisees.length === 0){
+      return { depenses: m.depensesProrateesTotal, recettes: m.recettesProrateesTotal, source: 'classique' };
+    }
+
+    return { depenses, recettes, source: sourcesUtilisees.join(' + ') };
   }finally{
     state = etatSauvegarde;
   }
