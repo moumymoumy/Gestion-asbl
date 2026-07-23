@@ -404,8 +404,7 @@ let syncCode = null;
 let syncRole = null;
 let syncEditCode = null;
 let syncViewCode = null;
-let syncChannel = null; // conservé pour compatibilité, plus utilisé (remplacé par le polling sécurisé)
-let syncPollingTimer = null;
+let syncChannel = null;
 let syncPushTimer = null;
 let syncStatus = 'non-configure';
 
@@ -501,12 +500,13 @@ async function creerProjetSyncAvecDonnees(donnees, nomProjet){
   syncStatus = 'connexion';
   mettreAJourStatutSync();
   try{
-    const { data: ligne, error } = await supabaseClient.rpc('creer_projet_securise', {
-      p_edit_code: codeEdition,
-      p_view_code: codeLecture,
-      p_data: donnees,
-      p_updated_by: idClientActuel
-    });
+    const { data: ligne, error } = await supabaseClient.from(SYNC_TABLE).insert({
+      edit_code: codeEdition,
+      view_code: codeLecture,
+      data: donnees,
+      updated_at: new Date().toISOString(),
+      updated_by: idClientActuel
+    }).select().single();
     if(error) throw error;
 
     state = fusionnerAvecEtatVide(ligne.data);
@@ -520,7 +520,7 @@ async function creerProjetSyncAvecDonnees(donnees, nomProjet){
       projectId: ligne.id, nom: nomProjet, role: 'editeur',
       editCode: codeEdition, viewCode: codeLecture, lastOpened: new Date().toISOString()
     });
-    demarrerPollingSync();
+    souscrireAuTempsReel();
     syncStatus = 'connecte';
     enregistrerAction('a créé le projet « ' + nomProjet + ' »');
     afficherToast('Projet « ' + nomProjet + ' » créé avec succès.', 'succes');
@@ -574,29 +574,31 @@ async function rejoindreCodeSync(code){
   syncStatus = 'connexion';
   mettreAJourStatutSync();
   try{
-    const { data: ligneJson, error } = await supabaseClient.rpc('rejoindre_projet_securise', {
-      p_code: codePropre
-    });
+    const { data: ligne, error } = await supabaseClient
+      .from(SYNC_TABLE)
+      .select('*')
+      .or('edit_code.eq.' + codePropre + ',view_code.eq.' + codePropre)
+      .maybeSingle();
     if(error) throw error;
-    if(!ligneJson){
+    if(!ligne){
       afficherToast("Aucun projet ne correspond à ce code.", 'erreur');
       syncStatus = 'erreur';
       mettreAJourStatutSync();
       return;
     }
-    state = fusionnerAvecEtatVide(ligneJson.data);
-    syncProjectId = ligneJson.id;
+    state = fusionnerAvecEtatVide(ligne.data);
+    syncProjectId = ligne.id;
     syncCode = codePropre;
-    syncRole = ligneJson.role;
-    syncEditCode = ligneJson.edit_code || null;
-    syncViewCode = ligneJson.view_code;
-    const nomProjet = (ligneJson.data && ligneJson.data.project && ligneJson.data.project.name) || 'Projet sans nom';
+    syncRole = (ligne.edit_code === codePropre) ? 'editeur' : 'lecture';
+    syncEditCode = (syncRole === 'editeur') ? ligne.edit_code : null;
+    syncViewCode = ligne.view_code;
+    const nomProjet = (ligne.data && ligne.data.project && ligne.data.project.name) || 'Projet sans nom';
     sauvegarderSyncLocalement();
     ajouterOuMettreAJourProjetConnu({
-      projectId: ligneJson.id, nom: nomProjet, role: syncRole,
+      projectId: ligne.id, nom: nomProjet, role: syncRole,
       editCode: syncEditCode, viewCode: syncViewCode, lastOpened: new Date().toISOString()
     });
-    demarrerPollingSync();
+    souscrireAuTempsReel();
     syncStatus = 'connecte';
     afficherToast(
       syncRole === 'editeur' ? 'Connecté en modification.' : 'Connecté en consultation seule.',
@@ -623,28 +625,25 @@ async function ouvrirProjetSyncDepuisListe(projectId){
   syncStatus = 'connexion';
   mettreAJourStatutSync();
   try{
-    const codeAUtiliser = entree.role === 'editeur' ? entree.editCode : entree.viewCode;
-    const { data: ligneJson, error } = await supabaseClient.rpc('recharger_projet_securise', {
-      p_project_id: projectId, p_code: codeAUtiliser
-    });
+    const { data: ligne, error } = await supabaseClient.from(SYNC_TABLE).select('*').eq('id', projectId).maybeSingle();
     if(error) throw error;
-    if(!ligneJson){
-      afficherToast("Ce projet n'existe plus en ligne, ou le code n'est plus valide.", 'erreur');
+    if(!ligne){
+      afficherToast("Ce projet n'existe plus en ligne.", 'erreur');
       syncStatus = 'erreur';
       mettreAJourStatutSync();
       return;
     }
-    state = fusionnerAvecEtatVide(ligneJson.data);
-    syncProjectId = ligneJson.id;
+    state = fusionnerAvecEtatVide(ligne.data);
+    syncProjectId = ligne.id;
     syncRole = entree.role;
-    syncCode = codeAUtiliser;
+    syncCode = entree.role === 'editeur' ? entree.editCode : entree.viewCode;
     syncEditCode = entree.role === 'editeur' ? entree.editCode : null;
     syncViewCode = entree.viewCode;
     entree.lastOpened = new Date().toISOString();
-    entree.nom = (ligneJson.data && ligneJson.data.project && ligneJson.data.project.name) || entree.nom;
+    entree.nom = (ligne.data && ligne.data.project && ligne.data.project.name) || entree.nom;
     ajouterOuMettreAJourProjetConnu(entree);
     sauvegarderSyncLocalement();
-    demarrerPollingSync();
+    souscrireAuTempsReel();
     syncStatus = 'connecte';
     appliquerModeLectureSeule();
     afficherToast('Projet « ' + entree.nom + ' » ouvert.', 'succes');
@@ -670,7 +669,7 @@ function sauvegarderSyncLocalement(){
 
 /* --- Ferme le projet actuellement ouvert (reste dans la liste, pour rouvrir plus tard) --- */
 function fermerProjetActifSync(){
-  arreterPollingSync();
+  if(syncChannel){ supabaseClient.removeChannel(syncChannel); syncChannel = null; }
   syncProjectId = null; syncCode = null; syncRole = null; syncEditCode = null; syncViewCode = null;
   localStorage.removeItem(SYNC_STORAGE_KEY);
   syncStatus = supabaseEstConfigure() ? 'pret' : 'non-configure';
@@ -680,66 +679,41 @@ function fermerProjetActifSync(){
 }
 
 
-/* --- Actualisation périodique sécurisée : remplace l'ancien temps réel (qui exigeait
-   une lecture ouverte à tous côté base de données). Toutes les 20 secondes, on
-   redemande les données au serveur EN FOURNISSANT le code — la fonction serveur
-   refuse de répondre si le code ne correspond pas, donc personne ne peut écouter
-   les changements d'un projet sans en connaître le code. Léger délai (jusqu'à 20s)
-   au lieu d'une mise à jour instantanée, en échange d'une vraie fermeture de la lecture. */
-function demarrerPollingSync(){
-  arreterPollingSync();
+function souscrireAuTempsReel(){
   if(!supabaseClient || !syncProjectId) return;
-  syncPollingTimer = setInterval(async () => {
-    if(!syncProjectId || !supabaseClient) return;
-    const codeAUtiliser = syncEditCode || syncViewCode || syncCode;
-    if(!codeAUtiliser) return;
-    try{
-      const { data: ligneJson, error } = await supabaseClient.rpc('recharger_projet_securise', {
-        p_project_id: syncProjectId, p_code: codeAUtiliser
-      });
-      if(error) throw error;
-      if(!ligneJson) return; // code devenu invalide ou projet supprimé : on ignore ce tour
-      if(ligneJson.updated_by === idClientActuel) return; // c'est notre propre sauvegarde
-      state = fusionnerAvecEtatVide(ligneJson.data);
-      rendreTout();
-      afficherToast('Mis à jour depuis un autre appareil.', 'info');
-      syncStatus = 'connecte';
+  if(syncChannel) supabaseClient.removeChannel(syncChannel);
+
+  syncChannel = supabaseClient
+    .channel('sync-' + syncProjectId)
+    .on('postgres_changes',
+      { event: 'UPDATE', schema: 'public', table: SYNC_TABLE, filter: 'id=eq.' + syncProjectId },
+      (payload) => {
+        if(payload.new.updated_by === idClientActuel) return;
+        state = fusionnerAvecEtatVide(payload.new.data);
+        rendreTout();
+        afficherToast('Mis à jour depuis un autre appareil.', 'info');
+      }
+    )
+    .subscribe((statut) => {
+      if(statut === 'SUBSCRIBED'){ syncStatus = 'connecte'; }
+      else if(statut === 'CHANNEL_ERROR' || statut === 'TIMED_OUT'){ syncStatus = 'erreur'; }
       mettreAJourStatutSync();
-    }catch(erreur){
-      console.error(erreur);
-    }
-  }, 20000);
+    });
 }
 
-function arreterPollingSync(){
-  if(syncPollingTimer){ clearInterval(syncPollingTimer); syncPollingTimer = null; }
-  if(syncChannel && supabaseClient){ try{ supabaseClient.removeChannel(syncChannel); }catch(e){} syncChannel = null; }
-}
-
-/* --- Envoi vers le cloud : jamais si on est en lecture seule (vérification
-   client, en plus de la vérification serveur faite par sauvegarder_projet_securise
-   qui refuse désormais toute écriture sans le bon code d'édition). --- */
+/* --- Envoi vers le cloud : jamais si on est en lecture seule --- */
 function planifierEnvoiCloud(){
   if(!syncProjectId || !supabaseClient) return;
   if(estLectureSeule()) return; // sécurité côté client : un lecteur n'écrit jamais
   clearTimeout(syncPushTimer);
   syncPushTimer = setTimeout(async () => {
     try{
-      const { data: succes, error } = await supabaseClient.rpc('sauvegarder_projet_securise', {
-        p_project_id: syncProjectId,
-        p_edit_code: syncEditCode,
-        p_data: state,
-        p_updated_by: idClientActuel
-      });
+      const { error } = await supabaseClient.from(SYNC_TABLE).update({
+        data: state,
+        updated_at: new Date().toISOString(),
+        updated_by: idClientActuel
+      }).eq('id', syncProjectId);
       if(error) throw error;
-      if(!succes){
-        // Le code d'édition ne correspond plus (ex. projet supprimé, code invalide) :
-        // la vérification serveur a refusé l'écriture, ce n'était pas possible avant.
-        afficherToast("Échec de la sauvegarde en ligne : code d'édition invalide.", 'erreur');
-        syncStatus = 'erreur';
-        mettreAJourStatutSync();
-        return;
-      }
       syncStatus = 'connecte';
     }catch(erreur){
       console.error(erreur);
@@ -749,7 +723,7 @@ function planifierEnvoiCloud(){
   }, 700);
 }
 
-async function reprendreSyncSiExistant(){
+function reprendreSyncSiExistant(){
   if(!supabaseEstConfigure()) return;
   let sauvegarde = null;
   try{ sauvegarde = JSON.parse(localStorage.getItem(SYNC_STORAGE_KEY) || 'null'); }catch(e){}
@@ -762,33 +736,7 @@ async function reprendreSyncSiExistant(){
   syncViewCode = sauvegarde.viewCode || null;
   syncStatus = 'connexion';
   appliquerModeLectureSeule();
-  mettreAJourStatutSync();
-
-  // Récupère des données à jour dès la reconnexion (le cache local peut être ancien),
-  // en fournissant le code — la fonction serveur refuse si le code n'est plus valide.
-  try{
-    const codeAUtiliser = syncEditCode || syncViewCode || syncCode;
-    const { data: ligneJson, error } = await supabaseClient.rpc('recharger_projet_securise', {
-      p_project_id: syncProjectId, p_code: codeAUtiliser
-    });
-    if(error) throw error;
-    if(ligneJson){
-      state = fusionnerAvecEtatVide(ligneJson.data);
-      rendreTout();
-      syncStatus = 'connecte';
-    }else{
-      // Le code n'est plus valide (projet supprimé, ou code changé) : on garde les
-      // dernières données connues localement, mais on ne force pas la déconnexion —
-      // l'utilisateur reste libre de fermer le projet lui-même si besoin.
-      syncStatus = 'erreur';
-    }
-  }catch(erreur){
-    console.error(erreur);
-    syncStatus = 'erreur';
-  }
-  mettreAJourStatutSync();
-  demarrerPollingSync();
-
+  souscrireAuTempsReel();
   // Reconstitue aussi l'entrée dans la liste "Projets synchronisés" si elle avait été
   // retirée (le "x" ne fait que masquer le raccourci, la connexion active continue
   // elle de fonctionner) : sans ça, un projet resté actif pouvait disparaître de la
@@ -801,7 +749,6 @@ async function reprendreSyncSiExistant(){
     viewCode: sauvegarde.viewCode || null,
     lastOpened: new Date().toISOString()
   });
-  if(currentView === 'sync') rendreSync();
 }
 
 function mettreAJourStatutSync(){
@@ -2916,11 +2863,14 @@ function rendreBudget(){
           <input type="range" class="slider" id="sim-participants" min="0" max="500" step="1" value="${m.nbParticipants}" oninput="ajusterSimulateur()">
         </div>
         <div>
-          <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:10px;">
             <label class="field-label" style="margin:0;">Prix du ticket / participation</label>
-            <span class="font-mono-num" style="font-weight:700; font-size:14px;" id="sim-prix-val">${formaterMontant(m.prixTicket)}</span>
+            <input type="number" id="sim-prix-champ" class="input-field" min="0" step="0.5"
+              style="width:120px; text-align:right; padding:6px 10px; font-size:14px; font-weight:700; font-family:inherit;"
+              value="${m.prixTicket}" oninput="synchroniserPrixDepuisChamp()">
           </div>
-          <input type="range" class="slider" id="sim-prix" min="0" max="500" step="1" value="${m.prixTicket}" oninput="ajusterSimulateur()">
+          <input type="range" class="slider" id="sim-prix" min="0" max="500" step="1" value="${Math.min(m.prixTicket, 500)}" oninput="synchroniserPrixDepuisCurseur()">
+          <p style="font-size:11px; color:var(--ink-soft); margin:6px 0 0 0;">Le curseur va jusqu'à 500 € pour un ajustement rapide — au-delà, saisis le montant exact dans le champ.</p>
         </div>
       </div>
 
@@ -3267,8 +3217,35 @@ function rendreRepartitionElevesSimulateur(m){
   const groupesLibelle = calculerRepartitionParLibelleEtEleve(m);
   if(groupesLibelle.length === 0) return ''; // rien à afficher tant qu'aucun élève n'est renseigné
 
+  /* --- Résumé global (tous projets/libellés confondus). Chaque élève compte une
+     fois par projet auquel il est rattaché : un élève sur 2 projets compte pour 2
+     dans ce total, puisque chaque projet fait l'objet d'un encodage séparé. --- */
+  let nbElevesTotalGeneral = 0, depensesTotalGeneral = 0, recettesTotalGeneral = 0;
+
   const blocsLibelle = groupesLibelle.map(groupeLibelle => {
     const estOuvert = !libellesElevesReplies.has(groupeLibelle.key);
+
+    /* --- Sous-total de ce projet/libellé (calculé sur tous ses élèves) --- */
+    const nbElevesProjet = groupeLibelle.eleves.length;
+    const depensesProjet = groupeLibelle.eleves.reduce((s, r) => s + r.totalDepensesReellesEleve, 0);
+    const recettesProjet = groupeLibelle.eleves.reduce((s, r) => s + r.recettesEleve, 0);
+    const beneficeProjet = recettesProjet - depensesProjet;
+    const rentabiliteMoyenneProjet = nbElevesProjet > 0 ? beneficeProjet / nbElevesProjet : 0;
+    const estViableProjet = beneficeProjet >= 0;
+
+    nbElevesTotalGeneral += nbElevesProjet;
+    depensesTotalGeneral += depensesProjet;
+    recettesTotalGeneral += recettesProjet;
+
+    const sousTotalHtml = `
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(110px,1fr)); gap:10px; font-size:12px; padding:12px 14px; margin:0 0 10px 0; background:var(--surface-2); border-radius:8px;">
+        <div><div style="color:var(--ink-soft); margin-bottom:2px;">Élèves</div><div class="font-mono-num" style="font-weight:700;">${nbElevesProjet}</div></div>
+        <div><div style="color:var(--ink-soft); margin-bottom:2px;">Dépenses</div><div class="font-mono-num" style="font-weight:700;">${formaterMontant(depensesProjet)}</div></div>
+        <div><div style="color:var(--ink-soft); margin-bottom:2px;">Recettes</div><div class="font-mono-num" style="font-weight:700;">${formaterMontant(recettesProjet)}</div></div>
+        <div><div style="color:var(--ink-soft); margin-bottom:2px;">${estViableProjet ? 'Bénéfice' : 'Déficit'}</div><div class="font-mono-num" style="font-weight:700; color:${estViableProjet ? 'var(--success)' : 'var(--danger)'};">${estViableProjet ? '+' : ''}${formaterMontant(beneficeProjet)}</div></div>
+        <div><div style="color:var(--ink-soft); margin-bottom:2px;">Moy. / élève</div><div class="font-mono-num" style="font-weight:700; color:${rentabiliteMoyenneProjet >= 0 ? 'var(--success)' : 'var(--danger)'};">${rentabiliteMoyenneProjet >= 0 ? '+' : ''}${formaterMontant(rentabiliteMoyenneProjet)}</div></div>
+      </div>
+    `;
 
     const cartes = groupeLibelle.eleves.map(r => {
       const estViableEleve = r.resultatEleve >= 0;
@@ -3330,14 +3307,34 @@ function rendreRepartitionElevesSimulateur(m){
         <span style="font-weight:700; font-size:13.5px;">${echapperHtml(groupeLibelle.label)}</span>
         <span style="font-weight:400; color:var(--ink-soft); font-size:12px;">(${groupeLibelle.eleves.length} élève${groupeLibelle.eleves.length > 1 ? 's' : ''})</span>
       </div>
+      <div style="padding-left:6px; margin-bottom:10px;">${sousTotalHtml}</div>
       ${estOuvert ? `<div style="padding-left:6px; margin-bottom:14px;">${cartes}</div>` : ''}
     `;
   }).join('');
+
+  const beneficeTotalGeneral = recettesTotalGeneral - depensesTotalGeneral;
+  const rentabiliteMoyenneGenerale = nbElevesTotalGeneral > 0 ? beneficeTotalGeneral / nbElevesTotalGeneral : 0;
+  const estViableGeneral = beneficeTotalGeneral >= 0;
+
+  const resumeGeneralHtml = groupesLibelle.length > 1 ? `
+    <div class="card" style="padding:18px; margin-bottom:18px; background:var(--primary-soft); border:none;">
+      <h4 class="font-display" style="font-size:13.5px; font-weight:700; margin:0 0 3px 0; color:var(--primary-dark);">Résumé global — tous projets confondus</h4>
+      <p style="font-size:11px; color:var(--primary-dark); opacity:0.8; margin:0 0 12px 0;">${groupesLibelle.length} projets/libellés. Un élève inscrit à plusieurs projets compte une fois par projet.</p>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(110px,1fr)); gap:12px;">
+        <div><div style="font-size:11.5px; color:var(--primary-dark); opacity:0.75; margin-bottom:3px;">Élèves (total)</div><div class="font-mono-num" style="font-weight:700; font-size:15px; color:var(--primary-dark);">${nbElevesTotalGeneral}</div></div>
+        <div><div style="font-size:11.5px; color:var(--primary-dark); opacity:0.75; margin-bottom:3px;">Dépenses totales</div><div class="font-mono-num" style="font-weight:700; font-size:15px; color:var(--primary-dark);">${formaterMontant(depensesTotalGeneral)}</div></div>
+        <div><div style="font-size:11.5px; color:var(--primary-dark); opacity:0.75; margin-bottom:3px;">Recettes totales</div><div class="font-mono-num" style="font-weight:700; font-size:15px; color:var(--primary-dark);">${formaterMontant(recettesTotalGeneral)}</div></div>
+        <div><div style="font-size:11.5px; color:var(--primary-dark); opacity:0.75; margin-bottom:3px;">${estViableGeneral ? 'Bénéfice' : 'Déficit'} total</div><div class="font-mono-num" style="font-weight:700; font-size:15px; color:${estViableGeneral ? 'var(--success)' : 'var(--danger)'};">${estViableGeneral ? '+' : ''}${formaterMontant(beneficeTotalGeneral)}</div></div>
+        <div><div style="font-size:11.5px; color:var(--primary-dark); opacity:0.75; margin-bottom:3px;">Moyenne / élève</div><div class="font-mono-num" style="font-weight:700; font-size:15px; color:${rentabiliteMoyenneGenerale >= 0 ? 'var(--success)' : 'var(--danger)'};">${rentabiliteMoyenneGenerale >= 0 ? '+' : ''}${formaterMontant(rentabiliteMoyenneGenerale)}</div></div>
+      </div>
+    </div>
+  ` : '';
 
   return `
     <div style="margin-top:22px; padding-top:20px; border-top:1px solid var(--border);">
       <h4 class="font-display" style="font-size:14px; font-weight:700; margin:0 0 4px 0;">Rentabilité par élève</h4>
       <p style="font-size:11.5px; color:var(--ink-soft); margin:0 0 14px 0;">Regroupée par libellé (dossiers repliables) : un même élève sur deux libellés différents a deux rentabilités bien séparées, chacune avec sa propre tarification (à l'unité ou au forfait).</p>
+      ${resumeGeneralHtml}
       ${blocsLibelle}
     </div>
   `;
@@ -3379,17 +3376,38 @@ function attacherEcouteursPricingEleves(){
 
 function ajusterSimulateur(){
   const participants = parseInt(document.getElementById('sim-participants').value, 10) || 0;
-  const prix = parseInt(document.getElementById('sim-prix').value, 10) || 0;
+  let prix = parseFloat(document.getElementById('sim-prix-champ').value);
+  if(isNaN(prix) || prix < 0) prix = 0;
   state.simulator.participants = participants;
   state.simulator.ticketPrice = prix;
   document.getElementById('sim-participants-val').textContent = participants;
-  document.getElementById('sim-prix-val').textContent = formaterMontant(prix);
   const m = calculerMetriques();
   document.getElementById('sim-resultats').innerHTML = rendreResultatsSimulateur(m);
   document.getElementById('sim-repartition-labels').innerHTML = rendreRepartitionLabelsSimulateur(m);
   attacherEcouteursPricingLabels();
   planifierSauvegarde();
   if(currentView === 'accueil') rendreAccueil();
+}
+
+/* --- Prix du ticket : synchronise le curseur (0-500€, pour un réglage rapide et
+   fluide) et le champ numérique (illimité, décimales acceptées) dans les deux sens. --- */
+function synchroniserPrixDepuisCurseur(){
+  const valeurCurseur = parseFloat(document.getElementById('sim-prix').value) || 0;
+  document.getElementById('sim-prix-champ').value = valeurCurseur;
+  ajusterSimulateur();
+}
+
+function synchroniserPrixDepuisChamp(){
+  const champ = document.getElementById('sim-prix-champ');
+  let valeur = parseFloat(champ.value);
+  if(isNaN(valeur)) valeur = 0;
+  if(valeur < 0){
+    valeur = 0;
+    champ.value = 0; // corrige immédiatement toute valeur négative saisie
+  }
+  const curseur = document.getElementById('sim-prix');
+  curseur.value = Math.min(valeur, parseFloat(curseur.max));
+  ajusterSimulateur();
 }
 
 /* --- Sessions d'exécution : CRUD --- */
