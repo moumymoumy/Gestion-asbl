@@ -406,6 +406,10 @@ let syncEditCode = null;
 let syncViewCode = null;
 let syncChannel = null; // conservé pour compatibilité, plus utilisé (remplacé par le polling sécurisé)
 let syncPollingTimer = null;
+// Vrai pendant le calcul du total tous-projets : empêche toute sauvegarde/actualisation
+// du projet actif de se déclencher pendant qu'on emprunte temporairement "state" pour
+// calculer les chiffres d'un AUTRE projet de la liste.
+let calculTotauxEnCours = false;
 let syncPushTimer = null;
 let syncStatus = 'non-configure';
 
@@ -690,6 +694,7 @@ function demarrerPollingSync(){
   if(!supabaseClient || !syncProjectId) return;
   syncPollingTimer = setInterval(async () => {
     if(!syncProjectId || !supabaseClient) return;
+    if(calculTotauxEnCours) return; // ne pas interférer avec le calcul multi-projets en cours
     const codeAUtiliser = syncEditCode || syncViewCode || syncCode;
     if(!codeAUtiliser) return;
     try{
@@ -719,6 +724,7 @@ function arreterPollingSync(){
 function planifierEnvoiCloud(){
   if(!syncProjectId || !supabaseClient) return;
   if(estLectureSeule()) return; // sécurité côté client : un lecteur n'écrit jamais
+  if(calculTotauxEnCours) return; // ne pas sauvegarder un "state" emprunté temporairement
   clearTimeout(syncPushTimer);
   syncPushTimer = setTimeout(async () => {
     try{
@@ -3178,6 +3184,28 @@ function rendreRepartitionLabelsSimulateur(m){
   const repartition = calculerRepartitionParLibelle(m);
   if(repartition.length < 2) return ''; // pas utile s'il n'y a qu'un seul libellé (ou aucun)
 
+  /* --- Résumé global (tous les libellés/projets confondus) --- */
+  const nbLibelles = repartition.length;
+  const depensesTotalGeneral = repartition.reduce((s, r) => s + r.totalDepensesReellesLabel, 0);
+  const recettesTotalGeneral = repartition.reduce((s, r) => s + r.recettesLabel, 0);
+  const beneficeTotalGeneral = recettesTotalGeneral - depensesTotalGeneral;
+  const rentabiliteMoyenneGenerale = nbLibelles > 0 ? beneficeTotalGeneral / nbLibelles : 0;
+  const estViableGeneral = beneficeTotalGeneral >= 0;
+
+  const resumeGeneralHtml = `
+    <div class="card" style="padding:18px; margin-bottom:18px; background:var(--primary-soft); border:none;">
+      <h4 class="font-display" style="font-size:13.5px; font-weight:700; margin:0 0 3px 0; color:var(--primary-dark);">Résumé global — tous libellés confondus</h4>
+      <p style="font-size:11px; color:var(--primary-dark); opacity:0.8; margin:0 0 12px 0;">${nbLibelles} libellés/projets.</p>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(110px,1fr)); gap:12px;">
+        <div><div style="font-size:11.5px; color:var(--primary-dark); opacity:0.75; margin-bottom:3px;">Libellés (total)</div><div class="font-mono-num" style="font-weight:700; font-size:15px; color:var(--primary-dark);">${nbLibelles}</div></div>
+        <div><div style="font-size:11.5px; color:var(--primary-dark); opacity:0.75; margin-bottom:3px;">Dépenses totales</div><div class="font-mono-num" style="font-weight:700; font-size:15px; color:var(--primary-dark);">${formaterMontant(depensesTotalGeneral)}</div></div>
+        <div><div style="font-size:11.5px; color:var(--primary-dark); opacity:0.75; margin-bottom:3px;">Recettes totales</div><div class="font-mono-num" style="font-weight:700; font-size:15px; color:var(--primary-dark);">${formaterMontant(recettesTotalGeneral)}</div></div>
+        <div><div style="font-size:11.5px; color:var(--primary-dark); opacity:0.75; margin-bottom:3px;">${estViableGeneral ? 'Bénéfice' : 'Déficit'} total</div><div class="font-mono-num" style="font-weight:700; font-size:15px; color:${estViableGeneral ? 'var(--success)' : 'var(--danger)'};">${estViableGeneral ? '+' : ''}${formaterMontant(beneficeTotalGeneral)}</div></div>
+        <div><div style="font-size:11.5px; color:var(--primary-dark); opacity:0.75; margin-bottom:3px;">Moyenne / libellé</div><div class="font-mono-num" style="font-weight:700; font-size:15px; color:${rentabiliteMoyenneGenerale >= 0 ? 'var(--success)' : 'var(--danger)'};">${rentabiliteMoyenneGenerale >= 0 ? '+' : ''}${formaterMontant(rentabiliteMoyenneGenerale)}</div></div>
+      </div>
+    </div>
+  `;
+
   const cartes = repartition.map(r => {
     const estViableLabel = r.resultatLabel >= 0;
     let seuilTexte;
@@ -3232,6 +3260,7 @@ function rendreRepartitionLabelsSimulateur(m){
     <div style="margin-top:22px; padding-top:20px; border-top:1px solid var(--border);">
       <h4 class="font-display" style="font-size:14px; font-weight:700; margin:0 0 4px 0;">Rentabilité par libellé</h4>
       <p style="font-size:11.5px; color:var(--ink-soft); margin:0 0 14px 0;">Chaque libellé a son propre prix (à l'unité ou au forfait) et son propre nombre de participants : les recettes et le seuil affichés ici ne reflètent QUE cette tarification propre. Les dépenses générales et la préparation restent réparties au prorata des heures ; main d'œuvre d'exécution et charges variables par participant attribuées directement à leur libellé.</p>
+      ${resumeGeneralHtml}
       ${cartes}
     </div>
   `;
@@ -4848,6 +4877,16 @@ function rendreSync(){
           <button class="btn-secondary" onclick="rejoindreCodeSync(document.getElementById('input-code-sync').value)">OK</button>
         </div>
       </div>
+      <div class="card" style="padding:22px;">
+        <i data-lucide="calculator" style="width:24px;height:24px; color:var(--primary); margin-bottom:10px;"></i>
+        <h3 class="font-display" style="font-size:14.5px; font-weight:700; margin:0 0 6px 0;">Total tous projets</h3>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 14px 0;">Additionne les dépenses et recettes de tous les projets de la liste "Projets synchronisés" ci-dessous, sans avoir à les ouvrir un par un.</p>
+        <button class="btn-secondary" onclick="calculerTotauxTousProjetsSync()"><i data-lucide="calculator" style="width:14px;height:14px;"></i> Calculer le total</button>
+      </div>
+    </div>
+
+    <div class="card" style="padding:22px; margin-bottom:20px; display:none;" id="carte-totaux-projets">
+      <div id="zone-totaux-projets"></div>
     </div>
 
     <div class="card" style="padding:22px; margin-bottom:20px;">
@@ -4855,6 +4894,95 @@ function rendreSync(){
       <p style="font-size:12px; color:var(--ink-soft); margin:2px 0 14px 0;">Clique sur un projet pour l'ouvrir directement.</p>
       ${listeHtml}
     </div>
+  `;
+  rafraichirIcones();
+}
+
+/* --- Calcule les Dépenses/Recettes attribuées de CHAQUE projet de la liste "Projets
+   synchronisés", plus un total général. Emprunte temporairement la variable "state"
+   (le temps d'un calcul synchrone, sans jamais l'utiliser pour un rendu ni une
+   sauvegarde) pour réutiliser telles quelles les fonctions de calcul existantes,
+   puis la restaure immédiatement — le projet actuellement ouvert à l'écran n'est
+   jamais affecté. --- */
+async function calculerTotauxTousProjetsSync(){
+  if(!supabaseEstConfigure()){
+    afficherToast("La synchronisation n'est pas encore configurée.", 'erreur');
+    return;
+  }
+  initialiserSupabase();
+
+  const projets = obtenirProjetsSyncConnus();
+  if(projets.length === 0){
+    afficherToast('Aucun projet dans la liste "Projets synchronisés".', 'erreur');
+    return;
+  }
+
+  const carte = document.getElementById('carte-totaux-projets');
+  const zone = document.getElementById('zone-totaux-projets');
+  carte.style.display = 'block';
+  zone.innerHTML = '<p style="font-size:12.5px; color:var(--ink-soft);">Calcul en cours, un instant...</p>';
+
+  calculTotauxEnCours = true;
+  const etatSauvegarde = state; // le projet réellement affiché à l'écran, jamais perdu
+  const lignes = [];
+  let totalDepenses = 0, totalRecettes = 0, nbEchecs = 0;
+
+  try{
+    for(const entree of projets){
+      const code = entree.editCode || entree.viewCode;
+      if(!code){ nbEchecs++; continue; }
+      try{
+        const { data: ligneJson, error } = await supabaseClient.rpc('recharger_projet_securise', {
+          p_project_id: entree.projectId, p_code: code
+        });
+        if(error || !ligneJson){ nbEchecs++; continue; }
+
+        // Emprunt synchrone de "state" : aucun await entre l'affectation et la
+        // restauration, donc aucun risque d'interférence avec le reste de l'app.
+        state = fusionnerAvecEtatVide(ligneJson.data);
+        const depensesProjet = calculerDepensesProratees().total;
+        const recettesProjet = calculerRecettesProratees().total;
+        state = etatSauvegarde;
+
+        totalDepenses += depensesProjet;
+        totalRecettes += recettesProjet;
+        lignes.push({ nom: entree.nom || 'Projet sans nom', depenses: depensesProjet, recettes: recettesProjet });
+      }catch(erreurLigne){
+        console.error(erreurLigne);
+        nbEchecs++;
+      }
+    }
+  }finally{
+    state = etatSauvegarde; // garantie supplémentaire, même en cas d'erreur imprévue
+    calculTotauxEnCours = false;
+  }
+
+  const resultatGeneral = totalRecettes - totalDepenses;
+  zone.innerHTML = `
+    <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0 0 6px 0;">Total tous projets</h3>
+    <p style="font-size:12px; color:var(--ink-soft); margin:2px 0 14px 0;">Dépenses et recettes attribuées, cumulées sur les ${lignes.length} projet${lignes.length > 1 ? 's' : ''} de la liste.</p>
+    <div style="overflow-x:auto;">
+      <table class="data-table">
+        <thead><tr><th>Projet</th><th>Dépenses</th><th>Recettes</th><th>Résultat</th></tr></thead>
+        <tbody>
+          ${lignes.map(l => `
+            <tr>
+              <td style="font-weight:600;">${echapperHtml(l.nom)}</td>
+              <td class="font-mono-num">${formaterMontant(l.depenses)}</td>
+              <td class="font-mono-num">${formaterMontant(l.recettes)}</td>
+              <td class="font-mono-num" style="font-weight:700; color:${(l.recettes - l.depenses) >= 0 ? 'var(--success)' : 'var(--danger)'};">${(l.recettes - l.depenses) >= 0 ? '+' : ''}${formaterMontant(l.recettes - l.depenses)}</td>
+            </tr>
+          `).join('')}
+          <tr style="background:var(--surface-2);">
+            <td style="font-weight:700;">Total général</td>
+            <td class="font-mono-num" style="font-weight:700;">${formaterMontant(totalDepenses)}</td>
+            <td class="font-mono-num" style="font-weight:700;">${formaterMontant(totalRecettes)}</td>
+            <td class="font-mono-num" style="font-weight:700; color:${resultatGeneral >= 0 ? 'var(--success)' : 'var(--danger)'};">${resultatGeneral >= 0 ? '+' : ''}${formaterMontant(resultatGeneral)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    ${nbEchecs > 0 ? `<p style="font-size:11.5px; color:var(--danger); margin-top:10px;">⚠️ ${nbEchecs} projet(s) n'ont pas pu être récupérés (code invalide ou projet supprimé) et sont exclus de ce total.</p>` : ''}
   `;
   rafraichirIcones();
 }
