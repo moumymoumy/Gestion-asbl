@@ -247,6 +247,9 @@
       <div class="nav-item" data-view="sync">
         <i data-lucide="refresh-cw"></i><span>Synchronisation</span>
       </div>
+      <div class="nav-item" data-view="guide">
+        <i data-lucide="book-open"></i><span>Guide d'utilisation</span>
+      </div>
     </nav>
 
     <div class="file-status-box" id="file-status-box">
@@ -275,6 +278,7 @@
     <section class="view-section" id="view-budget"></section>
     <section class="view-section" id="view-fichier"></section>
     <section class="view-section" id="view-sync"></section>
+    <section class="view-section" id="view-guide"></section>
 
   </main>
 
@@ -297,6 +301,9 @@
       </div>
       <div class="bottom-nav-item" data-view="sync">
         <i data-lucide="refresh-cw"></i><span>Sync</span>
+      </div>
+      <div class="bottom-nav-item" data-view="guide">
+        <i data-lucide="book-open"></i><span>Guide</span>
       </div>
     </div>
   </nav>
@@ -5119,6 +5126,7 @@ function rendreVue(vue){
   else if(vue === 'budget') rendreBudget();
   else if(vue === 'fichier') rendreFichier();
   else if(vue === 'sync') rendreSync();
+  else if(vue === 'guide') rendreGuide();
 }
 
 function rendreTout(){
@@ -5315,6 +5323,225 @@ function rendreSync(){
   `;
   rafraichirIcones();
   rendreZoneChargesIndicatives();
+}
+
+/* =========================================================================
+   GUIDE D'UTILISATION — page d'aide intégrée, directement dans l'application
+   ========================================================================= */
+function rendreGuide(){
+  const conteneur = document.getElementById('view-guide');
+
+  const sections = [
+    { id: 'quoi', titre: 'À quoi sert cette application ?', icone: 'sparkles' },
+    { id: 'donnees', titre: 'Où sont mes données ?', icone: 'database' },
+    { id: 'menu', titre: 'Le menu de gauche', icone: 'layout-list' },
+    { id: 'equipe', titre: 'Configuration & Équipe', icone: 'users' },
+    { id: 'taches', titre: 'Tâches', icone: 'list-checks' },
+    { id: 'budget', titre: 'Budget & Simulateur', icone: 'wallet' },
+    { id: 'sync-outils', titre: 'Outils de Synchronisation', icone: 'refresh-cw' },
+    { id: 'astuces', titre: 'Astuces pratiques', icone: 'lightbulb' },
+    { id: 'lexique', titre: 'Lexique', icone: 'book-marked' },
+  ];
+
+  const navRapideHtml = sections.map(s => `
+    <button onclick="document.getElementById('guide-${s.id}').scrollIntoView({behavior:'smooth', block:'start'});"
+      style="display:flex; align-items:center; gap:6px; padding:7px 13px; border-radius:20px; border:1px solid var(--border); background:var(--surface); color:var(--ink); font-size:12.5px; font-weight:600; cursor:pointer; white-space:nowrap;">
+      <i data-lucide="${s.icone}" style="width:13px;height:13px; color:var(--primary);"></i> ${s.titre}
+    </button>
+  `).join('');
+
+  conteneur.innerHTML = `
+    <div style="max-width:840px;">
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:6px;">
+        <div style="width:38px; height:38px; border-radius:10px; background:var(--primary-soft); display:flex; align-items:center; justify-content:center;">
+          <i data-lucide="book-open" style="width:20px;height:20px; color:var(--primary-dark);"></i>
+        </div>
+        <div>
+          <h1 class="font-display" style="font-size:22px; font-weight:700; margin:0;">Guide d'utilisation</h1>
+          <p style="font-size:12.5px; color:var(--ink-soft); margin:0;">Le mode d'emploi complet, directement dans l'application — pas besoin de PDF séparé.</p>
+        </div>
+      </div>
+
+      <div style="display:flex; flex-wrap:wrap; gap:8px; margin:20px 0 26px 0;">
+        ${navRapideHtml}
+      </div>
+
+      <div class="card" id="guide-quoi" style="padding:22px; margin-bottom:16px;">
+        <h2 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 10px 0; display:flex; align-items:center; gap:8px;">
+          <i data-lucide="sparkles" style="width:17px;height:17px; color:var(--primary);"></i> À quoi sert cette application ?
+        </h2>
+        <p style="font-size:13.5px; line-height:1.6; margin:0 0 10px 0;">Gestion ASBL t'aide à organiser un projet associatif (concert, exposition, cours collectifs ou individuels, événement...) :</p>
+        <ul style="font-size:13.5px; line-height:1.7; margin:0 0 10px 0; padding-left:20px;">
+          <li>suivre l'équipe et les tâches</li>
+          <li>encoder les dates d'exécution (répétitions, représentations, cours...)</li>
+          <li>calculer automatiquement le budget (dépenses, recettes, main d'œuvre)</li>
+          <li>simuler la rentabilité — globalement, par activité (libellé), et même par élève</li>
+        </ul>
+        <p style="font-size:13.5px; line-height:1.6; margin:0; color:var(--ink-soft);">Tout se passe dans une seule page, organisée en onglets sur la gauche.</p>
+      </div>
+
+      <div class="card" id="guide-donnees" style="padding:22px; margin-bottom:16px;">
+        <h2 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 10px 0; display:flex; align-items:center; gap:8px;">
+          <i data-lucide="database" style="width:17px;height:17px; color:var(--primary);"></i> Où sont mes données ?
+        </h2>
+        <p style="font-size:13.5px; line-height:1.6; margin:0 0 14px 0;">Deux façons de conserver ton projet — ne les confonds pas :</p>
+        <div style="overflow-x:auto; margin-bottom:14px;">
+          <table class="data-table">
+            <thead><tr><th></th><th>Fichier local</th><th>Synchronisation (cloud)</th></tr></thead>
+            <tbody>
+              <tr><td style="font-weight:600;">Où sont les données ?</td><td>Un fichier sur TON ordinateur</td><td>En ligne, accessible de partout</td></tr>
+              <tr><td style="font-weight:600;">Plusieurs personnes ?</td><td>Non, un seul appareil</td><td>Oui, en temps réel</td></tr>
+              <tr><td style="font-weight:600;">Onglet concerné</td><td>« Fichier projet »</td><td>« Synchronisation »</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p style="font-size:13.5px; line-height:1.6; margin:0 0 14px 0;">Seul(e) sur un seul ordinateur : le fichier local suffit. Plusieurs personnes, ou toi-même sur plusieurs appareils : utilise la Synchronisation.</p>
+        <details style="margin-bottom:8px;">
+          <summary style="cursor:pointer; font-weight:600; font-size:13px; padding:8px 0;">Créer un tout nouveau projet (vide)</summary>
+          <p style="font-size:13px; line-height:1.6; margin:6px 0 0 0; color:var(--ink-soft);">Synchronisation → « Créer un projet » → mot de passe administrateur (à demander à la personne qui gère l'application) → donne un nom à ton projet.</p>
+        </details>
+        <details style="margin-bottom:8px;">
+          <summary style="cursor:pointer; font-weight:600; font-size:13px; padding:8px 0;">Synchroniser un projet déjà en cours</summary>
+          <p style="font-size:13px; line-height:1.6; margin:6px 0 0 0; color:var(--ink-soft);">Synchronisation → « Synchroniser le projet en cours ». Tes données existantes sont conservées, rien n'est perdu. Ce bouton disparaît une fois qu'un projet cloud est actif.</p>
+        </details>
+        <details>
+          <summary style="cursor:pointer; font-weight:600; font-size:13px; padding:8px 0;">Rejoindre un projet existant</summary>
+          <p style="font-size:13px; line-height:1.6; margin:6px 0 0 0; color:var(--ink-soft);">Synchronisation → « Rejoindre avec un code » → colle le code (ex. <code>A3F9K2</code>) → OK.<br>Le <strong>code de modification</strong> permet de tout changer. Le <strong>code de consultation</strong> permet seulement de regarder.</p>
+        </details>
+      </div>
+
+      <div class="card" id="guide-menu" style="padding:22px; margin-bottom:16px;">
+        <h2 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 12px 0; display:flex; align-items:center; gap:8px;">
+          <i data-lucide="layout-list" style="width:17px;height:17px; color:var(--primary);"></i> Le menu de gauche
+        </h2>
+        <div style="overflow-x:auto;">
+          <table class="data-table">
+            <thead><tr><th>Onglet</th><th>À quoi il sert</th></tr></thead>
+            <tbody>
+              <tr><td style="font-weight:600;">Accueil</td><td>Vue d'ensemble : avancement, budget, seuil de rentabilité</td></tr>
+              <tr><td style="font-weight:600;">Configuration & Équipe</td><td>Infos du projet + liste des membres de l'équipe</td></tr>
+              <tr><td style="font-weight:600;">Tâches</td><td>Liste de choses à faire, avec statut</td></tr>
+              <tr><td style="font-weight:600;">Budget & Simulateur</td><td>Le cœur de l'application : dates, dépenses, recettes, simulation</td></tr>
+              <tr><td style="font-weight:600;">Fichier projet</td><td>Sauvegarde locale sur ton ordinateur</td></tr>
+              <tr><td style="font-weight:600;">Synchronisation</td><td>Partage cloud, total croisé, calculateur de charges</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" id="guide-equipe" style="padding:22px; margin-bottom:16px;">
+        <h2 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 10px 0; display:flex; align-items:center; gap:8px;">
+          <i data-lucide="users" style="width:17px;height:17px; color:var(--primary);"></i> Configuration & Équipe
+        </h2>
+        <p style="font-size:13.5px; line-height:1.6; margin:0 0 10px 0;">Renseigne le nom du projet, sa description, ses objectifs, ses dates, son statut.</p>
+        <p style="font-size:13.5px; line-height:1.6; margin:0;">Ajoute chaque membre : nom, rôle, type (salarié/bénévole), et son <strong>taux horaire</strong> (utilisé pour calculer le coût de la main d'œuvre).</p>
+        <div style="margin-top:12px; padding:11px 14px; background:var(--primary-soft); border-radius:8px; font-size:12.5px; color:var(--primary-dark);">
+          💡 Ajoute d'abord tes membres d'équipe avant d'aller dans Budget — plusieurs boutons y sont désactivés tant qu'aucun membre n'existe.
+        </div>
+      </div>
+
+      <div class="card" id="guide-taches" style="padding:22px; margin-bottom:16px;">
+        <h2 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 10px 0; display:flex; align-items:center; gap:8px;">
+          <i data-lucide="list-checks" style="width:17px;height:17px; color:var(--primary);"></i> Tâches
+        </h2>
+        <p style="font-size:13.5px; line-height:1.6; margin:0;">Ajoute une tâche, assigne-la (ou non) à un membre, et suis son statut : <strong>À faire → En cours → Terminé</strong>. L'avancement global s'affiche automatiquement sur l'Accueil.</p>
+      </div>
+
+      <div class="card" id="guide-budget" style="padding:22px; margin-bottom:16px;">
+        <h2 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 4px 0; display:flex; align-items:center; gap:8px;">
+          <i data-lucide="wallet" style="width:17px;height:17px; color:var(--primary);"></i> Budget & Simulateur
+        </h2>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 14px 0;">L'onglet le plus riche — déplie chaque étape ci-dessous dans l'ordre logique.</p>
+
+        <details open style="margin-bottom:10px; border-bottom:1px solid var(--border); padding-bottom:10px;">
+          <summary style="cursor:pointer; font-weight:700; font-size:13.5px; padding:6px 0;">Étape 1 — Sessions d'exécution</summary>
+          <div style="font-size:13px; line-height:1.65; margin-top:8px; color:var(--ink);">
+            <p>Encode chaque date où le projet « se déroule » : date, <strong>libellé</strong> (regroupe tes sessions par activité — les petites variations d'orthographe sont tolérées sans créer de doublon), <strong>élève(s)</strong> (optionnel), durée (heures ou plage horaire auto-calculée), statut de paiement (informatif).</p>
+            <p>Tableau organisé en dossiers repliables par libellé puis par date. Une icône poubelle sur chaque en-tête permet de <strong>supprimer toute une date ou tout un libellé</strong> en une fois, avec confirmation — les autres dates/libellés ne sont jamais touchés.</p>
+            <p><strong>Cours individuels et de groupe</strong> : le champ Élève accepte un seul nom, ou plusieurs séparés par une virgule. Éditable directement dans le tableau.</p>
+            <p><strong>Propagation automatique</strong> : renseigner un élève sur un créneau le propage automatiquement aux dates suivantes au même horaire, si elles sont encore vides. Effacer un élève propage aussi l'effacement aux dates suivantes qui ont encore exactement le même nom — jamais à une date déjà modifiée entre-temps.</p>
+            <p><strong>Créer plusieurs sessions rapidement</strong> : « Générer des créneaux » (découpe une plage horaire d'un seul jour en plusieurs créneaux), « Créer sur plusieurs dates » (répète sur une liste de dates, en individuel ou en groupe), « Dupliquer » (clone une session en enchaînant les horaires).</p>
+            <p><strong>Modifier la plage horaire d'un lot</strong> : réajuste automatiquement le nombre de créneaux sur toutes les dates du lot (avertissement si des élèves inscrits seraient supprimés).</p>
+          </div>
+        </details>
+
+        <details style="margin-bottom:10px; border-bottom:1px solid var(--border); padding-bottom:10px;">
+          <summary style="cursor:pointer; font-weight:700; font-size:13.5px; padding:6px 0;">Étape 2 — Recettes</summary>
+          <div style="font-size:13px; line-height:1.65; margin-top:8px; color:var(--ink);">
+            <p>Chaque source de revenu (billets, subside, don...). Modes : Ponctuel, Hebdomadaire/Mensuel/Annuel (proratisé sur les jours d'exécution), Tarif horaire, ou À l'unité (prix × participants propres à cette ligne).</p>
+          </div>
+        </details>
+
+        <details style="margin-bottom:10px; border-bottom:1px solid var(--border); padding-bottom:10px;">
+          <summary style="cursor:pointer; font-weight:700; font-size:13.5px; padding:6px 0;">Étape 3 — Dépenses</summary>
+          <div style="font-size:13px; line-height:1.65; margin-top:8px; color:var(--ink);">
+            <p>Même principe que les Recettes, plus <strong>Charge variable — par participant</strong> (coût qui augmente avec le nombre de participants d'un libellé donné).</p>
+            <p>Une ligne <strong>indicative</strong> sous le tableau donne le rythme quotidien/mensuel/annuel des charges récurrentes (Hebdo/Mensuel/Annuel uniquement) — n'intervient dans aucun calcul.</p>
+          </div>
+        </details>
+
+        <details style="margin-bottom:10px; border-bottom:1px solid var(--border); padding-bottom:10px;">
+          <summary style="cursor:pointer; font-weight:700; font-size:13.5px; padding:6px 0;">Étape 4 — Main d'œuvre</summary>
+          <div style="font-size:13px; line-height:1.65; margin-top:8px; color:var(--ink);">
+            <p>Deux tableaux : <strong>Préparation</strong> (jours × heures/jour) et <strong>Exécution</strong> (heures lors d'une session précise). Le coût suit le taux horaire du membre, en distinguant salarié (réel) et bénévolat (valorisé).</p>
+          </div>
+        </details>
+
+        <details style="margin-bottom:0;">
+          <summary style="cursor:pointer; font-weight:700; font-size:13.5px; padding:6px 0;">Étape 5 — Simulateur de rentabilité</summary>
+          <div style="font-size:13px; line-height:1.65; margin-top:8px; color:var(--ink);">
+            <p><strong>a) Simulation globale</strong> — un curseur (participants) + un curseur ET un champ numérique (prix du ticket, illimité, décimales acceptées, synchronisés entre eux).</p>
+            <p><strong>b) Rentabilité par libellé</strong> — chaque libellé a sa carte (À l'unité ou Forfait, dépenses/recettes/résultat/seuil propres, prix minimum indicatif). Dès 2 libellés, un résumé global apparaît en tête.</p>
+            <p><strong>c) Rentabilité par élève</strong> — regroupée par libellé, même principe par élève (seuil en nombre de séances). Sous-total par libellé toujours visible, résumé global dès plusieurs libellés.</p>
+            <p>Un même élève sur 2 activités (ex. Piano + Guitare) a deux rentabilités totalement séparées, jamais mélangées.</p>
+          </div>
+        </details>
+      </div>
+
+      <div class="card" id="guide-sync-outils" style="padding:22px; margin-bottom:16px;">
+        <h2 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 10px 0; display:flex; align-items:center; gap:8px;">
+          <i data-lucide="refresh-cw" style="width:17px;height:17px; color:var(--primary);"></i> Outils de Synchronisation
+        </h2>
+        <p style="font-size:13.5px; line-height:1.6; margin:0 0 10px 0;"><strong>Total tous les projets</strong> — le bouton « Calculer le total » additionne dépenses/recettes de tous tes projets synchronisés, sans devoir ouvrir chacun. La colonne « Source » indique la méthode utilisée par projet (élèves, libellés, ou classique).</p>
+        <p style="font-size:13.5px; line-height:1.6; margin:0 0 10px 0;"><strong>Calculateur de charges (indicatif)</strong> — outil séparé des projets, pour estimer un rythme de charges rapidement. Se synchronise entre appareils via un code, une fois relié.</p>
+        <p style="font-size:13.5px; line-height:1.6; margin:0;"><strong>Historique des actions</strong> — les 5 dernières actions sont visibles directement ; un bouton discret ouvre l'historique complet (jusqu'à 200 actions).</p>
+      </div>
+
+      <div class="card" id="guide-astuces" style="padding:22px; margin-bottom:16px;">
+        <h2 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 10px 0; display:flex; align-items:center; gap:8px;">
+          <i data-lucide="lightbulb" style="width:17px;height:17px; color:var(--primary);"></i> Astuces pratiques
+        </h2>
+        <ul style="font-size:13.5px; line-height:1.8; margin:0; padding-left:20px;">
+          <li>Les virgules fonctionnent dans tous les champs numériques (ex. <code>24,54</code>) — pas besoin d'un point.</li>
+          <li>Boutons grisés = une condition manque. Passe la souris dessus pour voir pourquoi.</li>
+          <li>Dossiers repliables (▸/▾) : clique sur un libellé pour déplier/replier.</li>
+          <li>Mode consultation seule : tout est visible mais rien n'est modifiable — normal, pas un bug.</li>
+          <li>Le journal d'activité montre qui a fait quoi récemment, avec accès à l'historique complet.</li>
+        </ul>
+      </div>
+
+      <div class="card" id="guide-lexique" style="padding:22px; margin-bottom:30px;">
+        <h2 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 12px 0; display:flex; align-items:center; gap:8px;">
+          <i data-lucide="book-marked" style="width:17px;height:17px; color:var(--primary);"></i> Lexique
+        </h2>
+        <div style="overflow-x:auto;">
+          <table class="data-table">
+            <tbody>
+              <tr><td style="font-weight:600; white-space:nowrap;">Prorata</td><td>Répartition proportionnelle d'un coût selon le nombre de jours ou d'heures</td></tr>
+              <tr><td style="font-weight:600; white-space:nowrap;">Libellé</td><td>Nom donné à une activité (ex. "Orchestre", "Piano") pour regrouper ses sessions</td></tr>
+              <tr><td style="font-weight:600; white-space:nowrap;">Élève</td><td>Personne suivant un cours ; une session peut avoir un ou plusieurs élèves</td></tr>
+              <tr><td style="font-weight:600; white-space:nowrap;">Lot de créneaux</td><td>Ensemble de sessions créées ensemble, modifiable en une fois</td></tr>
+              <tr><td style="font-weight:600; white-space:nowrap;">Forfait</td><td>Prix fixe par participant/élève pour l'ensemble des dates/séances</td></tr>
+              <tr><td style="font-weight:600; white-space:nowrap;">Seuil de rentabilité</td><td>Nombre minimum de participants (ou séances) pour ne pas être en déficit</td></tr>
+              <tr><td style="font-weight:600; white-space:nowrap;">Charges fixes</td><td>Coûts qui ne dépendent pas du nombre de participants</td></tr>
+              <tr><td style="font-weight:600; white-space:nowrap;">Charge variable</td><td>Coût qui augmente avec chaque participant en plus</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
 }
 
 /* --- Calcule les Dépenses/Recettes attribuées de CHAQUE projet de la liste "Projets
