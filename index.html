@@ -4904,6 +4904,42 @@ function rendreSync(){
    sauvegarde) pour réutiliser telles quelles les fonctions de calcul existantes,
    puis la restaure immédiatement — le projet actuellement ouvert à l'écran n'est
    jamais affecté. --- */
+/* --- Calcule les totaux d'UN projet (à partir de ses données brutes), en suivant la
+   cascade convenue :
+   1. S'il y a au moins un élève renseigné quelque part → totaux agrégés sur TOUS les
+      élèves de TOUS les libellés de ce projet (comme le résumé global "par élève").
+   2. Sinon, s'il y a au moins 2 libellés → totaux agrégés sur ces libellés (comme le
+      résumé global "par libellé").
+   3. Sinon → repli classique : Dépenses/Recettes attribuées au projet (haut de Budget).
+   Emprunte "state" de façon strictement synchrone (aucun await pendant l'emprunt),
+   donc sans aucun risque d'interférence avec le projet réellement affiché à l'écran. --- */
+function calculerTotauxProjetDepuisData(donneesProjet){
+  const etatSauvegarde = state;
+  state = fusionnerAvecEtatVide(donneesProjet);
+  try{
+    const m = calculerMetriques();
+    const groupesEleves = calculerRepartitionParLibelleEtEleve(m);
+    const nbElevesTotal = groupesEleves.reduce((s, g) => s + g.eleves.length, 0);
+
+    if(nbElevesTotal > 0){
+      const depenses = groupesEleves.reduce((s, g) => s + g.eleves.reduce((s2, r) => s2 + r.totalDepensesReellesEleve, 0), 0);
+      const recettes = groupesEleves.reduce((s, g) => s + g.eleves.reduce((s2, r) => s2 + r.recettesEleve, 0), 0);
+      return { depenses, recettes, source: 'élèves' };
+    }
+
+    const groupesLibelles = calculerRepartitionParLibelle(m);
+    if(groupesLibelles.length >= 2){
+      const depenses = groupesLibelles.reduce((s, r) => s + r.totalDepensesReellesLabel, 0);
+      const recettes = groupesLibelles.reduce((s, r) => s + r.recettesLabel, 0);
+      return { depenses, recettes, source: 'libellés' };
+    }
+
+    return { depenses: m.depensesProrateesTotal, recettes: m.recettesProrateesTotal, source: 'classique' };
+  }finally{
+    state = etatSauvegarde;
+  }
+}
+
 async function calculerTotauxTousProjetsSync(){
   if(!supabaseEstConfigure()){
     afficherToast("La synchronisation n'est pas encore configurée.", 'erreur');
@@ -4937,16 +4973,18 @@ async function calculerTotauxTousProjetsSync(){
         });
         if(error || !ligneJson){ nbEchecs++; continue; }
 
-        // Emprunt synchrone de "state" : aucun await entre l'affectation et la
-        // restauration, donc aucun risque d'interférence avec le reste de l'app.
-        state = fusionnerAvecEtatVide(ligneJson.data);
-        const depensesProjet = calculerDepensesProratees().total;
-        const recettesProjet = calculerRecettesProratees().total;
-        state = etatSauvegarde;
+        // Emprunt synchrone de "state" (via calculerTotauxProjetDepuisData), aucun
+        // risque d'interférence avec le reste de l'app, ni avec le projet affiché.
+        const resultatProjet = calculerTotauxProjetDepuisData(ligneJson.data);
 
-        totalDepenses += depensesProjet;
-        totalRecettes += recettesProjet;
-        lignes.push({ nom: entree.nom || 'Projet sans nom', depenses: depensesProjet, recettes: recettesProjet });
+        totalDepenses += resultatProjet.depenses;
+        totalRecettes += resultatProjet.recettes;
+        lignes.push({
+          nom: entree.nom || 'Projet sans nom',
+          depenses: resultatProjet.depenses,
+          recettes: resultatProjet.recettes,
+          source: resultatProjet.source
+        });
       }catch(erreurLigne){
         console.error(erreurLigne);
         nbEchecs++;
@@ -4960,14 +4998,15 @@ async function calculerTotauxTousProjetsSync(){
   const resultatGeneral = totalRecettes - totalDepenses;
   zone.innerHTML = `
     <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0 0 6px 0;">Total tous projets</h3>
-    <p style="font-size:12px; color:var(--ink-soft); margin:2px 0 14px 0;">Dépenses et recettes attribuées, cumulées sur les ${lignes.length} projet${lignes.length > 1 ? 's' : ''} de la liste.</p>
+    <p style="font-size:12px; color:var(--ink-soft); margin:2px 0 14px 0;">Dépenses et recettes cumulées sur les ${lignes.length} projet${lignes.length > 1 ? 's' : ''} de la liste. Chaque projet utilise en priorité son résumé "par élève", sinon son résumé "par libellé", sinon les montants classiques attribués au projet.</p>
     <div style="overflow-x:auto;">
       <table class="data-table">
-        <thead><tr><th>Projet</th><th>Dépenses</th><th>Recettes</th><th>Résultat</th></tr></thead>
+        <thead><tr><th>Projet</th><th>Source</th><th>Dépenses</th><th>Recettes</th><th>Résultat</th></tr></thead>
         <tbody>
           ${lignes.map(l => `
             <tr>
               <td style="font-weight:600;">${echapperHtml(l.nom)}</td>
+              <td><span class="badge" style="background:var(--surface-2); color:var(--ink-soft); font-size:11px;">${l.source}</span></td>
               <td class="font-mono-num">${formaterMontant(l.depenses)}</td>
               <td class="font-mono-num">${formaterMontant(l.recettes)}</td>
               <td class="font-mono-num" style="font-weight:700; color:${(l.recettes - l.depenses) >= 0 ? 'var(--success)' : 'var(--danger)'};">${(l.recettes - l.depenses) >= 0 ? '+' : ''}${formaterMontant(l.recettes - l.depenses)}</td>
@@ -4975,6 +5014,7 @@ async function calculerTotauxTousProjetsSync(){
           `).join('')}
           <tr style="background:var(--surface-2);">
             <td style="font-weight:700;">Total général</td>
+            <td></td>
             <td class="font-mono-num" style="font-weight:700;">${formaterMontant(totalDepenses)}</td>
             <td class="font-mono-num" style="font-weight:700;">${formaterMontant(totalRecettes)}</td>
             <td class="font-mono-num" style="font-weight:700; color:${resultatGeneral >= 0 ? 'var(--success)' : 'var(--danger)'};">${resultatGeneral >= 0 ? '+' : ''}${formaterMontant(resultatGeneral)}</td>
