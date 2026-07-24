@@ -458,6 +458,7 @@ let syncPollingTimer = null;
 // du projet actif de se déclencher pendant qu'on emprunte temporairement "state" pour
 // calculer les chiffres d'un AUTRE projet de la liste.
 let calculTotauxEnCours = false;
+let dernierResultatTotauxProjetsHtml = null; // conserve l'affichage entre deux rendus (ex. actualisation en arrière-plan)
 let syncPushTimer = null;
 let syncStatus = 'non-configure';
 
@@ -5513,8 +5514,8 @@ function rendreSync(){
       </div>
     </div>
 
-    <div class="card" style="padding:22px; margin-bottom:20px; display:none;" id="carte-totaux-projets">
-      <div id="zone-totaux-projets"></div>
+    <div class="card" style="padding:22px; margin-bottom:20px; ${dernierResultatTotauxProjetsHtml ? '' : 'display:none;'}" id="carte-totaux-projets">
+      <div id="zone-totaux-projets">${dernierResultatTotauxProjetsHtml || ''}</div>
     </div>
 
     <div class="card" style="padding:22px; margin-bottom:20px;">
@@ -5876,7 +5877,7 @@ async function calculerTotauxTousProjetsSync(){
   }
 
   const resultatGeneral = totalRecettes - totalDepenses;
-  zone.innerHTML = `
+  const htmlResultat = `
     <h3 class="font-display" style="font-size:15px; font-weight:700; margin:0 0 6px 0;">Total tous projets</h3>
     <p style="font-size:12px; color:var(--ink-soft); margin:2px 0 14px 0;">Dépenses et recettes cumulées sur les ${lignes.length} projet${lignes.length > 1 ? 's' : ''} de la liste. Chaque projet utilise en priorité son résumé "par élève", sinon son résumé "par libellé", sinon les montants classiques attribués au projet.</p>
     <div style="overflow-x:auto;">
@@ -5906,6 +5907,8 @@ async function calculerTotauxTousProjetsSync(){
     </div>
     ${nbEchecs > 0 ? `<p style="font-size:11.5px; color:var(--danger); margin-top:10px;">⚠️ ${nbEchecs} projet(s) n'ont pas pu être récupérés (code invalide ou projet supprimé) et sont exclus de ce total.</p>` : ''}
   `;
+  dernierResultatTotauxProjetsHtml = htmlResultat; // survit aux rafraîchissements en arrière-plan
+  zone.innerHTML = htmlResultat;
   rafraichirIcones();
 }
 
