@@ -526,6 +526,42 @@ function retirerProjetSyncConnu(projectId, evenement){
   if(currentView === 'sync') rendreSync();
 }
 
+/* --- Suppression DÉFINITIVE d'un projet (données réellement effacées côté
+   serveur), avec confirmation obligatoire — pas juste un retrait local. --- */
+function demanderSuppressionProjet(projectId, nom, editCode, evenement){
+  if(evenement) evenement.stopPropagation();
+  ouvrirModalConfirmation(
+    'Supprimer ce projet définitivement ?',
+    `Le projet « ${nom} » et toutes ses données (sessions, dépenses, tarification...) seront supprimés pour toujours, pour tout le monde. Cette action est irréversible.`,
+    'Supprimer définitivement',
+    () => supprimerProjetDefinitivement(projectId, editCode)
+  );
+}
+
+async function supprimerProjetDefinitivement(projectId, editCode){
+  if(!supabaseEstConfigure()) return;
+  initialiserSupabase();
+  try{
+    const { data: succes, error } = await supabaseClient.rpc('supprimer_projet_securise', {
+      p_project_id: projectId, p_edit_code: editCode
+    });
+    if(error) throw error;
+    if(!succes){
+      afficherToast("Suppression impossible (code invalide ou déjà supprimé).", 'erreur');
+      return;
+    }
+    sauvegarderProjetsSyncConnus(obtenirProjetsSyncConnus().filter(p => p.projectId !== projectId));
+    if(syncProjectId === projectId){
+      fermerProjetActifSync();
+    }
+    afficherToast('Projet supprimé définitivement.', 'info');
+    if(currentView === 'sync') rendreSync();
+  }catch(erreur){
+    console.error(erreur);
+    afficherToast('Erreur lors de la suppression.', 'erreur');
+  }
+}
+
 /* =========================================================================
    COMPTE ADMINISTRATEUR — connexion, déconnexion, récupération de mot de passe
    ========================================================================= */
@@ -5462,9 +5498,16 @@ function rendreSync(){
               <div style="font-size:11.5px; color:var(--ink-soft);">${p.role === 'editeur' ? 'Modification' : 'Consultation seule'} · ouvert ${formaterDate(p.lastOpened)}</div>
             </div>
           </div>
-          <button class="btn-danger-ghost" onclick="retirerProjetSyncConnu('${p.projectId}', event)" title="Retirer de la liste">
-            <i data-lucide="x" style="width:15px;height:15px;"></i>
-          </button>
+          <div style="display:flex; align-items:center; gap:4px;">
+            ${p.role === 'editeur' ? `
+              <button class="btn-danger-ghost" onclick="demanderSuppressionProjet('${p.projectId}', '${echapperHtml(p.nom).replace(/'/g, "\\'")}', '${p.editCode}', event)" title="Supprimer définitivement">
+                <i data-lucide="trash-2" style="width:15px;height:15px;"></i>
+              </button>
+            ` : ''}
+            <button class="btn-danger-ghost" onclick="retirerProjetSyncConnu('${p.projectId}', event)" title="Retirer de la liste (sans supprimer)">
+              <i data-lucide="x" style="width:15px;height:15px;"></i>
+            </button>
+          </div>
         </div>
       `).join('');
 
