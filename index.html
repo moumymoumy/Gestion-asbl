@@ -5592,11 +5592,12 @@ function calculerTotauxProjetDepuisData(donneesProjet){
 
     // Repli classique : rien d'exploitable dans les deux résumés ci-dessus
     // (aucun élève nulle part, et pas 2 libellés ou plus).
+    const nbJours = calculerNbJoursExecution();
     if(sourcesUtilisees.length === 0){
-      return { depenses: m.depensesProrateesTotal, recettes: m.recettesProrateesTotal, source: 'classique' };
+      return { depenses: m.depensesProrateesTotal, recettes: m.recettesProrateesTotal, source: 'classique', nbJours };
     }
 
-    return { depenses, recettes, source: sourcesUtilisees.join(' + ') };
+    return { depenses, recettes, source: sourcesUtilisees.join(' + '), nbJours };
   }finally{
     state = etatSauvegarde;
   }
@@ -5623,7 +5624,7 @@ async function calculerTotauxTousProjetsSync(){
   calculTotauxEnCours = true;
   const etatSauvegarde = state; // le projet réellement affiché à l'écran, jamais perdu
   const lignes = [];
-  let totalDepenses = 0, totalRecettes = 0, nbEchecs = 0;
+  let totalDepenses = 0, totalRecettes = 0, totalJours = 0, nbEchecs = 0;
 
   try{
     for(const entree of projets){
@@ -5641,11 +5642,13 @@ async function calculerTotauxTousProjetsSync(){
 
         totalDepenses += resultatProjet.depenses;
         totalRecettes += resultatProjet.recettes;
+        totalJours += resultatProjet.nbJours;
         lignes.push({
           nom: entree.nom || 'Projet sans nom',
           depenses: resultatProjet.depenses,
           recettes: resultatProjet.recettes,
-          source: resultatProjet.source
+          source: resultatProjet.source,
+          nbJours: resultatProjet.nbJours
         });
       }catch(erreurLigne){
         console.error(erreurLigne);
@@ -5663,12 +5666,13 @@ async function calculerTotauxTousProjetsSync(){
     <p style="font-size:12px; color:var(--ink-soft); margin:2px 0 14px 0;">Dépenses et recettes cumulées sur les ${lignes.length} projet${lignes.length > 1 ? 's' : ''} de la liste. Chaque projet utilise en priorité son résumé "par élève", sinon son résumé "par libellé", sinon les montants classiques attribués au projet.</p>
     <div style="overflow-x:auto;">
       <table class="data-table">
-        <thead><tr><th>Projet</th><th>Source</th><th>Dépenses</th><th>Recettes</th><th>Résultat</th></tr></thead>
+        <thead><tr><th>Projet</th><th>Source</th><th>Jours</th><th>Dépenses</th><th>Recettes</th><th>Résultat</th></tr></thead>
         <tbody>
           ${lignes.map(l => `
             <tr>
               <td style="font-weight:600;">${echapperHtml(l.nom)}</td>
               <td><span class="badge" style="background:var(--surface-2); color:var(--ink-soft); font-size:11px;">${l.source}</span></td>
+              <td class="font-mono-num">${l.nbJours}</td>
               <td class="font-mono-num">${formaterMontant(l.depenses)}</td>
               <td class="font-mono-num">${formaterMontant(l.recettes)}</td>
               <td class="font-mono-num" style="font-weight:700; color:${(l.recettes - l.depenses) >= 0 ? 'var(--success)' : 'var(--danger)'};">${(l.recettes - l.depenses) >= 0 ? '+' : ''}${formaterMontant(l.recettes - l.depenses)}</td>
@@ -5677,6 +5681,7 @@ async function calculerTotauxTousProjetsSync(){
           <tr style="background:var(--surface-2);">
             <td style="font-weight:700;">Total général</td>
             <td></td>
+            <td class="font-mono-num" style="font-weight:700;">${totalJours}</td>
             <td class="font-mono-num" style="font-weight:700;">${formaterMontant(totalDepenses)}</td>
             <td class="font-mono-num" style="font-weight:700;">${formaterMontant(totalRecettes)}</td>
             <td class="font-mono-num" style="font-weight:700; color:${resultatGeneral >= 0 ? 'var(--success)' : 'var(--danger)'};">${resultatGeneral >= 0 ? '+' : ''}${formaterMontant(resultatGeneral)}</td>
