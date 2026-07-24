@@ -383,24 +383,18 @@ let editingLaborId = null;
    PRINCIPE : chaque équipe a UNE ligne dans Supabase, mais DEUX codes :
    - un « code modification » (rôle éditeur : peut tout changer)
    - un « code consultation » (rôle lecture seule : peut seulement regarder)
-   Créer une équipe nécessite le mot de passe administrateur ci-dessous.
+   Créer un projet nécessite désormais un vrai compte administrateur (email +
+   mot de passe, via Supabase Auth) — voir Synchronisation > Espace administrateur.
 
    ⚠️ CONFIGURATION REQUISE avant déploiement :
    - SUPABASE_URL / SUPABASE_ANON_KEY : vos identifiants Supabase
-   - ADMIN_PASSWORD : un mot de passe de votre choix, à ne communiquer
-     qu'aux personnes autorisées à créer de nouvelles équipes.
-
-   ⚠️ LIMITE DE SÉCURITÉ HONNÊTE : ce mot de passe est vérifié uniquement
-   dans ce fichier (côté navigateur). Il décourage une utilisation
-   accidentelle ou non autorisée par un membre de l'équipe, mais une
-   personne techniquement capable d'inspecter le code de la page pourrait
-   le contourner. Pour une vraie protection à toute épreuve, il faudrait
-   un compte utilisateur par personne — dites-le-moi si vous voulez qu'on
-   mette ça en place plus tard.
+   - Un compte administrateur créé manuellement dans Supabase (Authentication
+     > Users), et l'URL du site renseignée dans Authentication > URL
+     Configuration (sinon les emails de réinitialisation de mot de passe
+     pointeront vers "localhost").
    ========================================================================= */
 const SUPABASE_URL = 'https://axihduusjdpxbpzohajd.supabase.co';        // ex : https://xxxxxxxx.supabase.co
 const SUPABASE_ANON_KEY = 'sb_publishable_rr6dnokRb9Lgik33AfAucQ_sKt_FR6o';
-const ADMIN_PASSWORD = '8uym9vhaug5f8j'; // choisissez-en un vous-même
 
 const SYNC_TABLE = 'asbl_projects';
 const SYNC_STORAGE_KEY = 'asbl_sync_v2';           // { projectId, code, role, editCode, viewCode }
@@ -409,6 +403,7 @@ const CLIENT_ID_KEY = 'asbl_client_id';
 
 let supabaseClient = null;
 let syncProjectId = null;
+let adminUser = null; // { id, email } si l'administrateur est connecté, sinon null
 let syncCode = null;
 let syncRole = null;
 let syncEditCode = null;
@@ -486,12 +481,119 @@ function retirerProjetSyncConnu(projectId, evenement){
   if(currentView === 'sync') rendreSync();
 }
 
-/* --- Demande le mot de passe admin avant de créer un projet --- */
+/* =========================================================================
+   COMPTE ADMINISTRATEUR — connexion, déconnexion, récupération de mot de passe
+   ========================================================================= */
+
+/* --- Au démarrage : reprend une session déjà active, et écoute les changements
+   (connexion, déconnexion, lien de récupération de mot de passe cliqué). --- */
+async function initialiserSessionAdmin(){
+  if(!supabaseEstConfigure()) return;
+  initialiserSupabase();
+
+  const { data } = await supabaseClient.auth.getSession();
+  if(data.session){
+    adminUser = { id: data.session.user.id, email: data.session.user.email };
+    await synchroniserListeProjetsDepuisCompte();
+  }
+
+  supabaseClient.auth.onAuthStateChange((event, session) => {
+    if(event === 'PASSWORD_RECOVERY'){
+      afficherFormulaireNouveauMotDePasse();
+      return;
+    }
+    adminUser = session ? { id: session.user.id, email: session.user.email } : null;
+    if(currentView === 'sync') rendreSync();
+  });
+
+  if(currentView === 'sync') rendreSync();
+}
+
+async function connexionAdmin(){
+  const email = (document.getElementById('admin-email').value || '').trim();
+  const motDePasse = document.getElementById('admin-password').value || '';
+  if(!email || !motDePasse){ afficherToast('Entre ton email et ton mot de passe.', 'erreur'); return; }
+  initialiserSupabase();
+  const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password: motDePasse });
+  if(error){
+    afficherToast(error.message === 'Invalid login credentials' ? 'Email ou mot de passe incorrect.' : 'Erreur : ' + error.message, 'erreur');
+    return;
+  }
+  adminUser = { id: data.user.id, email: data.user.email };
+  await synchroniserListeProjetsDepuisCompte();
+  afficherToast('Connecté(e) avec succès.', 'succes');
+  rendreSync();
+}
+
+function deconnexionAdmin(){
+  supabaseClient.auth.signOut();
+  adminUser = null;
+  rendreSync();
+  afficherToast('Déconnecté(e) de l\'espace administrateur.', 'info');
+}
+
+/* --- Récupère la liste des projets créés par ce compte, et les ajoute/actualise
+   dans la liste locale "Projets synchronisés" — sans jamais retaper de code. --- */
+async function synchroniserListeProjetsDepuisCompte(){
+  try{
+    const { data: liste, error } = await supabaseClient.rpc('lister_mes_projets_securise');
+    if(error) throw error;
+    (liste || []).forEach(p => {
+      ajouterOuMettreAJourProjetConnu({
+        projectId: p.id, nom: p.nom, role: 'editeur',
+        editCode: p.edit_code, viewCode: p.view_code, lastOpened: new Date().toISOString()
+      });
+    });
+  }catch(erreur){
+    console.error(erreur);
+  }
+}
+
+async function demanderReinitialisationMotDePasse(){
+  const email = (window.prompt('Entre ton email pour recevoir un lien de réinitialisation :') || '').trim();
+  if(!email) return;
+  initialiserSupabase();
+  const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+    redirectTo: window.location.origin + window.location.pathname
+  });
+  if(error){ afficherToast('Erreur : ' + error.message, 'erreur'); return; }
+  afficherToast('Email envoyé (si ce compte existe) — vérifie ta boîte de réception.', 'succes');
+}
+
+function afficherFormulaireNouveauMotDePasse(){
+  const racine = document.getElementById('modal-root');
+  racine.innerHTML = `
+    <div class="modal-backdrop show" id="modal-nouveau-mdp-backdrop">
+      <div class="modal-box">
+        <h3 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 6px 0;">Définir un nouveau mot de passe</h3>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 14px 0;">Choisis un nouveau mot de passe pour ton compte administrateur.</p>
+        <label class="field-label">Nouveau mot de passe (6 caractères minimum)</label>
+        <input type="password" class="input-field" id="nouveau-mdp-champ" placeholder="••••••••" style="margin-bottom:16px;">
+        <div style="display:flex; justify-content:flex-end; gap:10px;">
+          <button class="btn-primary" onclick="validerNouveauMotDePasse()"><i data-lucide="check" style="width:15px;height:15px;"></i> Valider</button>
+        </div>
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
+}
+
+async function validerNouveauMotDePasse(){
+  const nouveau = document.getElementById('nouveau-mdp-champ').value || '';
+  if(nouveau.length < 6){ afficherToast('6 caractères minimum.', 'erreur'); return; }
+  const { data, error } = await supabaseClient.auth.updateUser({ password: nouveau });
+  if(error){ afficherToast('Erreur : ' + error.message, 'erreur'); return; }
+  adminUser = { id: data.user.id, email: data.user.email };
+  await synchroniserListeProjetsDepuisCompte();
+  fermerModal();
+  afficherToast('Mot de passe mis à jour — tu es connecté(e).', 'succes');
+  naviguerVers('sync');
+}
+
+/* --- Exige d'être connecté(e) en tant qu'administrateur avant de créer un projet --- */
 function demanderMotDePasseAdminEtCreer(modeVierge){
-  const saisie = window.prompt("Mot de passe administrateur requis pour créer un nouveau projet :");
-  if(saisie === null) return;
-  if(saisie !== ADMIN_PASSWORD){
-    afficherToast('Mot de passe administrateur incorrect.', 'erreur');
+  if(!adminUser){
+    afficherToast('Connecte-toi (espace administrateur) avant de créer un projet.', 'erreur');
     return;
   }
   const nomProjet = (window.prompt("Nom de ce nouveau projet (ex. « Fête annuelle 2027 ») :") || '').trim();
@@ -553,10 +655,8 @@ async function creerProjetSyncAvecDonnees(donnees, nomProjet){
 function importerFichierCommeNouveauProjetSync(fichierInput){
   const fichier = fichierInput.files && fichierInput.files[0];
   if(!fichier) return;
-  const saisie = window.prompt("Mot de passe administrateur requis pour créer un nouveau projet :");
-  if(saisie === null){ fichierInput.value = ''; return; }
-  if(saisie !== ADMIN_PASSWORD){
-    afficherToast('Mot de passe administrateur incorrect.', 'erreur');
+  if(!adminUser){
+    afficherToast('Connecte-toi (espace administrateur) avant de créer un projet.', 'erreur');
     fichierInput.value = '';
     return;
   }
@@ -1667,10 +1767,8 @@ async function reprendreLiaisonChargesSyncSiExistant(){
    (comme la création d'un projet). --- */
 async function synchroniserChargesIndicativesMaintenant(){
   if(!supabaseEstConfigure()){ afficherToast("La synchronisation n'est pas encore configurée.", 'erreur'); return; }
-  const saisie = window.prompt("Mot de passe administrateur requis pour synchroniser le calculateur de charges :");
-  if(saisie === null) return;
-  if(saisie !== ADMIN_PASSWORD){
-    afficherToast('Mot de passe administrateur incorrect.', 'erreur');
+  if(!adminUser){
+    afficherToast('Connecte-toi (espace administrateur) avant de synchroniser.', 'erreur');
     return;
   }
   const codeEdition = genererCodeAleatoire();
@@ -5257,6 +5355,35 @@ function rendreSync(){
 
     ${blocProjetActif}
 
+    <div class="card" style="padding:22px; margin-bottom:20px; max-width:900px; background:${adminUser ? 'var(--success-soft)' : 'var(--surface)'};">
+      ${adminUser ? `
+        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <i data-lucide="shield-check" style="width:20px;height:20px; color:var(--success);"></i>
+            <div>
+              <div style="font-weight:700; font-size:13.5px;">Espace administrateur</div>
+              <div style="font-size:12px; color:var(--ink-soft);">Connecté en tant que ${echapperHtml(adminUser.email)}</div>
+            </div>
+          </div>
+          <button class="btn-secondary" onclick="deconnexionAdmin()" style="padding:7px 14px; font-size:12.5px;">Se déconnecter</button>
+        </div>
+      ` : `
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:14px;">
+          <i data-lucide="shield" style="width:18px;height:18px; color:var(--primary);"></i>
+          <h3 class="font-display" style="font-size:14.5px; font-weight:700; margin:0;">Espace administrateur</h3>
+        </div>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 14px 0;">Connecte-toi pour créer des projets et retrouver automatiquement tous tes projets sur n'importe quel appareil, sans code à retaper.</p>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px,1fr)); gap:10px; margin-bottom:10px;">
+          <input type="email" class="input-field" id="admin-email" placeholder="Email">
+          <input type="password" class="input-field" id="admin-password" placeholder="Mot de passe">
+        </div>
+        <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
+          <button class="btn-primary" onclick="connexionAdmin()"><i data-lucide="log-in" style="width:14px;height:14px;"></i> Se connecter</button>
+          <button onclick="demanderReinitialisationMotDePasse()" style="background:none; border:none; color:var(--primary); font-size:12px; font-weight:600; cursor:pointer;">Mot de passe oublié ?</button>
+        </div>
+      `}
+    </div>
+
     <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px,1fr)); gap:16px; max-width:900px; margin-bottom:20px;">
       ${!syncProjectId ? `
         <div class="card" style="padding:22px; border-color:var(--primary-soft);">
@@ -5740,6 +5867,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   rafraichirIcones();
   chargerChargesIndicatives();
   reprendreLiaisonChargesSyncSiExistant();
+  initialiserSessionAdmin();
 
   document.querySelectorAll('.nav-item').forEach(el => {
     el.addEventListener('click', () => naviguerVers(el.dataset.view));
