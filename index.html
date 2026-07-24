@@ -599,6 +599,36 @@ async function synchroniserListeProjetsDepuisCompte(){
   }catch(erreur){
     console.error(erreur);
   }
+  await synchroniserChargesDepuisCompte();
+}
+
+/* --- Relie automatiquement le Calculateur de charges du compte administrateur
+   connecté, sans code à retaper — même principe que pour les projets. --- */
+async function synchroniserChargesDepuisCompte(){
+  try{
+    const { data: liste, error } = await supabaseClient.rpc('lister_mes_charges_securise');
+    if(error) throw error;
+    if(!liste || liste.length === 0) return; // aucun calculateur encore synchronisé pour ce compte
+
+    const entree = liste[0]; // un seul calculateur par administrateur, pour l'instant
+    chargesSyncId = entree.id;
+    chargesSyncCode = entree.edit_code;
+
+    const { data: ligneJson, error: erreurRecharge } = await supabaseClient.rpc('recharger_charges_indicatives_securise', {
+      p_id: chargesSyncId, p_code: chargesSyncCode
+    });
+    if(erreurRecharge) throw erreurRecharge;
+    if(ligneJson){
+      chargesIndicatives = Array.isArray(ligneJson.data) ? ligneJson.data : [];
+      sauvegarderChargesIndicatives();
+      sauvegarderLiaisonChargesSync();
+      chargesSyncStatus = 'connecte';
+      demarrerPollingCharges();
+      if(currentView === 'sync') rendreZoneChargesIndicatives();
+    }
+  }catch(erreur){
+    console.error(erreur);
+  }
 }
 
 async function demanderReinitialisationMotDePasse(){
