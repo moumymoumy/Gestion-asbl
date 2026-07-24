@@ -215,7 +215,51 @@
 </style>
 </head>
 <body>
-<div id="app" class="app-shell">
+<div id="ecran-verrouille" style="position:fixed; inset:0; z-index:9999; background:var(--surface-2); display:flex; align-items:center; justify-content:center; padding:20px;">
+  <div style="width:100%; max-width:420px;">
+    <div style="text-align:center; margin-bottom:22px;">
+      <div style="width:52px; height:52px; border-radius:14px; background:var(--primary-soft); display:flex; align-items:center; justify-content:center; margin:0 auto 12px auto;">
+        <i data-lucide="lock" style="width:26px;height:26px; color:var(--primary-dark);"></i>
+      </div>
+      <h1 class="font-display" style="font-size:20px; font-weight:700; margin:0;">Gestion ASBL</h1>
+      <p style="font-size:12.5px; color:var(--ink-soft); margin:4px 0 0 0;">Connexion administrateur, ou accès par code, requis.</p>
+    </div>
+
+    <div class="card" style="padding:22px; margin-bottom:14px;">
+      <h3 class="font-display" style="font-size:14px; font-weight:700; margin:0 0 12px 0; display:flex; align-items:center; gap:8px;">
+        <i data-lucide="shield" style="width:16px;height:16px; color:var(--primary);"></i> Administrateur
+      </h3>
+      <div style="display:flex; flex-direction:column; gap:10px; margin-bottom:12px;">
+        <input type="email" class="input-field" id="verrou-admin-email" placeholder="Email" autocomplete="off">
+        <input type="password" class="input-field" id="verrou-admin-password" placeholder="Mot de passe" autocomplete="new-password">
+      </div>
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+        <button class="btn-primary" onclick="connexionAdminDepuisVerrou()"><i data-lucide="log-in" style="width:14px;height:14px;"></i> Se connecter</button>
+        <button onclick="demanderReinitialisationMotDePasse()" style="background:none; border:none; color:var(--primary); font-size:12px; font-weight:600; cursor:pointer;">Mot de passe oublié ?</button>
+      </div>
+    </div>
+
+    <div style="display:flex; align-items:center; gap:10px; margin:16px 0;">
+      <div style="flex:1; height:1px; background:var(--border);"></div>
+      <span style="font-size:11.5px; color:var(--ink-soft);">OU</span>
+      <div style="flex:1; height:1px; background:var(--border);"></div>
+    </div>
+
+    <div class="card" style="padding:22px;">
+      <h3 class="font-display" style="font-size:14px; font-weight:700; margin:0 0 6px 0; display:flex; align-items:center; gap:8px;">
+        <i data-lucide="key-round" style="width:16px;height:16px; color:var(--primary);"></i> Rejoindre avec un code
+      </h3>
+      <p style="font-size:12px; color:var(--ink-soft); margin:0 0 12px 0;">Si on t'a donné un code de modification ou de consultation pour un projet précis.</p>
+      <div style="display:flex; gap:10px;">
+        <input type="text" class="input-field" id="verrou-code-champ" placeholder="EX: A3F9K2" style="text-transform:uppercase;" maxlength="6">
+        <button class="btn-secondary" onclick="rejoindreCodeDepuisVerrou()">OK</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="app" class="app-shell" style="display:none;">
+
 
   <aside class="sidebar">
     <div class="brand">
@@ -528,6 +572,13 @@ async function connexionAdmin(){
 function deconnexionAdmin(){
   supabaseClient.auth.signOut();
   adminUser = null;
+  if(!syncProjectId){
+    // Ni compte ni projet ouvert : on revient à l'écran de verrouillage.
+    const ecran = document.getElementById('ecran-verrouille');
+    const app = document.getElementById('app');
+    if(ecran) ecran.style.display = 'flex';
+    if(app) app.style.display = 'none';
+  }
   rendreSync();
   afficherToast('Déconnecté(e) de l\'espace administrateur.', 'info');
 }
@@ -588,6 +639,43 @@ async function validerNouveauMotDePasse(){
   fermerModal();
   afficherToast('Mot de passe mis à jour — tu es connecté(e).', 'succes');
   naviguerVers('sync');
+}
+
+/* =========================================================================
+   ÉCRAN DE VERROUILLAGE — connexion admin ou code requis avant toute chose
+   ========================================================================= */
+function deverrouillerApplication(){
+  const ecran = document.getElementById('ecran-verrouille');
+  const app = document.getElementById('app');
+  if(ecran) ecran.style.display = 'none';
+  if(app) app.style.display = '';
+}
+
+async function connexionAdminDepuisVerrou(){
+  const email = (document.getElementById('verrou-admin-email').value || '').trim();
+  const motDePasse = document.getElementById('verrou-admin-password').value || '';
+  if(!email || !motDePasse){ afficherToast('Entre ton email et ton mot de passe.', 'erreur'); return; }
+  if(!supabaseEstConfigure()){ afficherToast("La synchronisation n'est pas encore configurée.", 'erreur'); return; }
+  initialiserSupabase();
+  const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password: motDePasse });
+  if(error){
+    afficherToast(error.message === 'Invalid login credentials' ? 'Email ou mot de passe incorrect.' : 'Erreur : ' + error.message, 'erreur');
+    return;
+  }
+  adminUser = { id: data.user.id, email: data.user.email };
+  await synchroniserListeProjetsDepuisCompte();
+  deverrouillerApplication();
+  afficherToast('Connecté(e) avec succès.', 'succes');
+  naviguerVers('sync');
+  rendreTout();
+}
+
+async function rejoindreCodeDepuisVerrou(){
+  const champ = document.getElementById('verrou-code-champ');
+  await rejoindreCodeSync(champ ? champ.value : '');
+  if(syncProjectId){
+    deverrouillerApplication();
+  }
 }
 
 /* --- Exige d'être connecté(e) en tant qu'administrateur avant de créer un projet --- */
@@ -5372,8 +5460,8 @@ function rendreSync(){
         </div>
         <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 14px 0;">Connecte-toi pour créer des projets et retrouver automatiquement tous tes projets sur n'importe quel appareil, sans code à retaper.</p>
         <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px,1fr)); gap:10px; margin-bottom:10px;">
-          <input type="email" class="input-field" id="admin-email" placeholder="Email">
-          <input type="password" class="input-field" id="admin-password" placeholder="Mot de passe">
+          <input type="email" class="input-field" id="admin-email" placeholder="Email" autocomplete="off">
+          <input type="password" class="input-field" id="admin-password" placeholder="Mot de passe" autocomplete="new-password">
         </div>
         <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">
           <button class="btn-primary" onclick="connexionAdmin()"><i data-lucide="log-in" style="width:14px;height:14px;"></i> Se connecter</button>
@@ -5867,7 +5955,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   rafraichirIcones();
   chargerChargesIndicatives();
   reprendreLiaisonChargesSyncSiExistant();
-  initialiserSessionAdmin();
 
   document.querySelectorAll('.nav-item').forEach(el => {
     el.addEventListener('click', () => naviguerVers(el.dataset.view));
@@ -5880,17 +5967,24 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Synchronisation cloud : reprise automatique si une équipe était déjà active
   initialiserSupabase();
-  reprendreSyncSiExistant();
+  await reprendreSyncSiExistant();
+  await initialiserSessionAdmin();
   appliquerModeLectureSeule();
 
   rendreTout();
 
-  // On ne force plus la création d'un fichier local : l'application
-  // fonctionne désormais très bien uniquement via la synchronisation cloud.
-  // On oriente juste doucement les nouveaux utilisateurs, sans les bloquer.
-  if(!fileHandle && !syncProjectId){
-    naviguerVers('sync');
-    afficherToast("Crée ou rejoins une équipe (onglet Synchronisation) pour commencer, ou ouvre un fichier local si tu préfères.", 'info');
+  // Écran de verrouillage : reste affiché tant qu'aucun projet ni compte
+  // administrateur n'est déjà actif sur cet appareil.
+  if(syncProjectId || adminUser){
+    deverrouillerApplication();
+
+    // On ne force plus la création d'un fichier local : l'application
+    // fonctionne désormais très bien uniquement via la synchronisation cloud.
+    // On oriente juste doucement les nouveaux utilisateurs, sans les bloquer.
+    if(!fileHandle && !syncProjectId){
+      naviguerVers('sync');
+      afficherToast("Crée ou rejoins une équipe (onglet Synchronisation) pour commencer, ou ouvre un fichier local si tu préfères.", 'info');
+    }
   }
 });
 
