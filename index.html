@@ -5353,8 +5353,6 @@ function rendreSync(){
     <h1 class="font-display" style="font-size:22px; font-weight:700; margin:0 0 6px 0;">Synchronisation</h1>
     <p style="font-size:13.5px; color:var(--ink-soft); margin:0 0 22px 0;">Relie plusieurs appareils pour qu'ils partagent le même projet, mis à jour instantanément.</p>
 
-    ${blocProjetActif}
-
     <div class="card" style="padding:22px; margin-bottom:20px; max-width:900px; background:${adminUser ? 'var(--success-soft)' : 'var(--surface)'};">
       ${adminUser ? `
         <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
@@ -5383,6 +5381,8 @@ function rendreSync(){
         </div>
       `}
     </div>
+
+    ${blocProjetActif}
 
     <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px,1fr)); gap:16px; max-width:900px; margin-bottom:20px;">
       ${!syncProjectId ? `
