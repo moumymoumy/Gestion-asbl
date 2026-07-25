@@ -2062,7 +2062,7 @@ function ouvrirModalChargeIndicative(id){
           </div>
           <div>
             <label class="field-label">Montant (€)</label>
-            <input type="number" class="input-field" id="charge-indicative-montant" min="0" step="0.5" placeholder="0.00" value="${charge ? charge.amount : ''}">
+            <input type="text" inputmode="decimal" class="input-field" id="charge-indicative-montant" placeholder="0.00" value="${charge ? charge.amount : ''}">
           </div>
         </div>
         <div style="display:flex; gap:10px; margin-top:20px; justify-content:flex-end;">
@@ -5996,7 +5996,7 @@ async function calculerTotauxTousProjetsSync(){
    Fonctionne sur tous les champs numériques présents ET futurs (délégation
    sur document, pas besoin de toucher chaque champ individuellement). */
 document.addEventListener('keydown', function(e){
-  if(e.key !== ',' || !e.target.matches('input[type="number"]')) return;
+  if(e.key !== ',' || !e.target.matches('input[type="number"], input[inputmode="decimal"]')) return;
   const input = e.target;
   if(String(input.value).includes('.')) { e.preventDefault(); return; } // un seul séparateur décimal
   e.preventDefault();
@@ -6009,7 +6009,7 @@ document.addEventListener('keydown', function(e){
 }, true);
 
 document.addEventListener('paste', function(e){
-  if(!e.target.matches('input[type="number"]')) return;
+  if(!e.target.matches('input[type="number"], input[inputmode="decimal"]')) return;
   const texteColle = (e.clipboardData || window.clipboardData).getData('text');
   if(!texteColle || !texteColle.includes(',')) return;
   e.preventDefault();
