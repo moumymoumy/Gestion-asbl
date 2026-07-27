@@ -603,9 +603,14 @@ async function connexionAdmin(){
     return;
   }
   adminUser = { id: data.user.id, email: data.user.email };
-  await synchroniserListeProjetsDepuisCompte();
   afficherToast('Connecté(e) avec succès.', 'succes');
   rendreSync();
+  try{
+    await synchroniserListeProjetsDepuisCompte();
+    rendreSync();
+  }catch(erreur){
+    console.error('Récupération automatique des projets : erreur non bloquante', erreur);
+  }
 }
 
 function deconnexionAdmin(){
@@ -670,13 +675,35 @@ async function synchroniserChargesDepuisCompte(){
 }
 
 async function demanderReinitialisationMotDePasse(){
-  const email = (window.prompt('Entre ton email pour recevoir un lien de réinitialisation :') || '').trim();
-  if(!email) return;
+  const racine = document.getElementById('modal-root');
+  racine.innerHTML = `
+    <div class="modal-backdrop show" id="modal-reset-mdp-backdrop">
+      <div class="modal-box">
+        <h3 class="font-display" style="font-size:16px; font-weight:700; margin:0 0 6px 0;">Mot de passe oublié</h3>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0 0 14px 0;">Entre ton email pour recevoir un lien de réinitialisation.</p>
+        <label class="field-label">Email</label>
+        <input type="email" class="input-field" id="reset-mdp-email" placeholder="ton.email@exemple.com" style="margin-bottom:16px;">
+        <div style="display:flex; justify-content:flex-end; gap:10px;">
+          <button class="btn-secondary" onclick="fermerModal()">Annuler</button>
+          <button class="btn-primary" onclick="envoyerReinitialisationMotDePasse()"><i data-lucide="send" style="width:15px;height:15px;"></i> Envoyer</button>
+        </div>
+      </div>
+    </div>
+  `;
+  rafraichirIcones();
+  document.getElementById('modal-reset-mdp-backdrop').addEventListener('click', (e) => { if(e.target.id === 'modal-reset-mdp-backdrop') fermerModal(); });
+}
+
+async function envoyerReinitialisationMotDePasse(){
+  const email = (document.getElementById('reset-mdp-email').value || '').trim();
+  if(!email){ afficherToast('Entre ton email.', 'erreur'); return; }
+  if(!supabaseEstConfigure()){ afficherToast("La synchronisation n'est pas encore configurée.", 'erreur'); return; }
   initialiserSupabase();
   const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
     redirectTo: window.location.origin + window.location.pathname
   });
   if(error){ afficherToast('Erreur : ' + error.message, 'erreur'); return; }
+  fermerModal();
   afficherToast('Email envoyé (si ce compte existe) — vérifie ta boîte de réception.', 'succes');
 }
 
@@ -731,12 +758,20 @@ async function connexionAdminDepuisVerrou(){
     afficherToast(error.message === 'Invalid login credentials' ? 'Email ou mot de passe incorrect.' : 'Erreur : ' + error.message, 'erreur');
     return;
   }
+  // Connexion réussie : on déverrouille IMMÉDIATEMENT, avant toute autre étape.
+  // Si la récupération automatique des projets échoue ensuite, l'accès reste
+  // acquis — jamais bloqué par un souci sur une étape secondaire.
   adminUser = { id: data.user.id, email: data.user.email };
-  await synchroniserListeProjetsDepuisCompte();
   deverrouillerApplication();
   afficherToast('Connecté(e) avec succès.', 'succes');
   naviguerVers('sync');
   rendreTout();
+  try{
+    await synchroniserListeProjetsDepuisCompte();
+    rendreTout();
+  }catch(erreur){
+    console.error('Récupération automatique des projets : erreur non bloquante', erreur);
+  }
 }
 
 async function rejoindreCodeDepuisVerrou(){
