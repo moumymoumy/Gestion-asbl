@@ -1836,6 +1836,80 @@ function mettreAJourPricingEleve(libelle, eleve, champ, valeur){
   }
 }
 
+/* --- Génère automatiquement N tranches pour un élève en Forfait :
+   - Montant réparti également (la dernière tranche absorbe l'arrondi, pour que
+     la somme corresponde toujours exactement au forfait).
+   - Date d'échéance espacée uniformément entre la première et la dernière
+     séance réelle de cet élève sous ce libellé.
+   Remplace TOUTES les tranches existantes — une confirmation est demandée
+   avant, si des tranches existent déjà. Tout reste ensuite modifiable
+   manuellement (montant, date, ajout/suppression d'une tranche). --- */
+function genererTranchesAutomatiques(libelle, eleve, nombreTranches){
+  const n = Math.max(1, Math.round(nombreTranches) || 1);
+  const pricing = obtenirPricingEleve(libelle, eleve);
+  const total = pricing.forfaitAmount;
+
+  const cleLibelle = normaliserLibelle(libelle);
+  const cleEleve = normaliserLibelle(eleve);
+  const datesSessions = [...new Set(
+    state.executionSessions
+      .filter(s => {
+        const texteLibelle = (s.label && s.label.trim()) ? s.label.trim() : '';
+        const cle = texteLibelle ? normaliserLibelle(texteLibelle) : '__sans_libelle__';
+        if(cle !== cleLibelle) return false;
+        return obtenirElevesSession(s).some(nom => normaliserLibelle(nom) === cleEleve);
+      })
+      .map(s => s.date)
+  )].sort();
+
+  const nouvellesTranches = [];
+  let sommeDejaAffectee = 0;
+  for(let i = 0; i < n; i++){
+    let montant;
+    if(i === n - 1){
+      montant = Math.round((total - sommeDejaAffectee) * 100) / 100; // absorbe l'arrondi
+    }else{
+      montant = Math.round((total / n) * 100) / 100;
+      sommeDejaAffectee += montant;
+    }
+
+    let dateEcheance = '';
+    if(datesSessions.length > 0){
+      // Chaque tranche tombe le jour de la PREMIÈRE séance réelle de son bloc
+      // (le nombre de cours divisé en n blocs) — jamais une date interpolée qui
+      // ne correspondrait à aucun vrai cours, et jamais le dernier jour de saison.
+      const indexSeance = Math.min(
+        datesSessions.length - 1,
+        Math.floor((i * datesSessions.length) / n)
+      );
+      dateEcheance = datesSessions[indexSeance];
+    }
+
+    nouvellesTranches.push({ id: genererId(), montant, dateEcheance, recu: false });
+  }
+
+  if(!state.studentPricing[libelle]) state.studentPricing[libelle] = {};
+  if(!state.studentPricing[libelle][eleve]) state.studentPricing[libelle][eleve] = { mode: 'forfait', unitPrice: 0, participants: 1, forfaitAmount: total, echeancier: [] };
+  state.studentPricing[libelle][eleve].echeancier = nouvellesTranches;
+  planifierSauvegarde();
+  rafraichirEcheancierAffiche(libelle, eleve);
+  afficherToast(`${n} tranche(s) générée(s) automatiquement.`, 'succes');
+}
+
+function demanderGenerationTranches(libelle, eleve, nombreTranches){
+  const pricing = obtenirPricingEleve(libelle, eleve);
+  if(pricing.echeancier.length === 0){
+    genererTranchesAutomatiques(libelle, eleve, nombreTranches);
+    return;
+  }
+  ouvrirModalConfirmation(
+    'Régénérer l\'échéancier ?',
+    `Les ${pricing.echeancier.length} tranche(s) actuelle(s) seront remplacées par ${nombreTranches} nouvelle(s) tranche(s), réparties également et datées automatiquement. Tes modifications manuelles actuelles seront perdues.`,
+    'Régénérer',
+    () => genererTranchesAutomatiques(libelle, eleve, nombreTranches)
+  );
+}
+
 /* --- Échéancier de paiement (mode Forfait uniquement) : ajoute une tranche, en
    pré-remplissant son montant avec le solde restant (forfait - somme des tranches
    déjà présentes) pour tomber juste par défaut, tout en restant modifiable. --- */
@@ -1857,6 +1931,30 @@ function supprimerTranchePaiement(libelle, eleve, trancheId){
   pricing.echeancier = pricing.echeancier.filter(t => t.id !== trancheId);
   planifierSauvegarde();
   rafraichirEcheancierAffiche(libelle, eleve);
+}
+
+/* --- Génère automatiquement N tranches égales, dont la somme correspond
+   EXACTEMENT au forfait (le dernier centime d'arrondi est absorbé par la
+   toute dernière tranche). Remplace l'échéancier existant — les dates et
+   statuts "reçu" restent ensuite librement modifiables comme avant. --- */
+function genererTranchesEgales(libelle, eleve, nombreTranches){
+  const n = Math.max(1, Math.round(Number(nombreTranches) || 0));
+  const pricing = obtenirPricingEleve(libelle, eleve);
+  const montantParTranche = Math.floor((pricing.forfaitAmount / n) * 100) / 100;
+  const nouvellesTranches = [];
+  let sommeDejaAffectee = 0;
+  for(let i = 0; i < n; i++){
+    const estDerniere = i === n - 1;
+    const montant = estDerniere ? Math.round((pricing.forfaitAmount - sommeDejaAffectee) * 100) / 100 : montantParTranche;
+    sommeDejaAffectee += montant;
+    nouvellesTranches.push({ id: genererId(), montant, dateEcheance: '', recu: false });
+  }
+  if(!state.studentPricing[libelle]) state.studentPricing[libelle] = {};
+  if(!state.studentPricing[libelle][eleve]) state.studentPricing[libelle][eleve] = { mode: 'forfait', unitPrice: 0, participants: 1, forfaitAmount: 0, echeancier: [] };
+  state.studentPricing[libelle][eleve].echeancier = nouvellesTranches;
+  planifierSauvegarde();
+  rafraichirEcheancierAffiche(libelle, eleve);
+  afficherToast(`${n} tranches égales générées.`, 'succes');
 }
 
 function mettreAJourTranchePaiement(libelle, eleve, trancheId, champ, valeur){
@@ -1907,11 +2005,16 @@ function rendreEcheancierHtml(libelle, eleve, pricing){
 
   return `
     <div style="margin-top:12px; padding-top:12px; border-top:1px dashed var(--border);">
-      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; flex-wrap:wrap; gap:8px;">
         <span style="font-size:12px; font-weight:600;">Échéancier de paiement</span>
-        <button type="button" class="btn-secondary btn-ajouter-tranche" data-libelle="${echapperHtml(libelle)}" data-eleve="${echapperHtml(eleve)}" style="padding:4px 10px; font-size:11.5px;">
-          <i data-lucide="plus" style="width:12px;height:12px;"></i> Tranche
-        </button>
+        <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+          <label style="font-size:11px; color:var(--ink-soft); white-space:nowrap;">Nombre de tranches</label>
+          <input type="number" class="input-field champ-nombre-tranches" min="1" step="1" value="${pricing.echeancier.length || 2}" style="width:55px; padding:4px 6px; font-size:12px;">
+          <button type="button" class="btn-secondary btn-generer-tranches" data-libelle="${echapperHtml(libelle)}" data-eleve="${echapperHtml(eleve)}" style="padding:4px 10px; font-size:11.5px;">Générer</button>
+          <button type="button" class="btn-secondary btn-ajouter-tranche" data-libelle="${echapperHtml(libelle)}" data-eleve="${echapperHtml(eleve)}" style="padding:4px 10px; font-size:11.5px;">
+            <i data-lucide="plus" style="width:12px;height:12px;"></i> Tranche
+          </button>
+        </div>
       </div>
       ${pricing.echeancier.length === 0 ? `
         <p style="font-size:11.5px; color:var(--ink-soft); margin:0;">Paiement en une fois (aucune tranche ajoutée).</p>
@@ -4351,6 +4454,14 @@ function attacherEcouteursPricingEleves(){
       afficherToast('Suggestion appliquée — tu peux encore l\'ajuster si besoin (réduction, etc.).', 'succes');
     });
   });
+  conteneur.querySelectorAll('.btn-generer-tranches').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const zone = btn.closest('.zone-echeancier');
+      const champNombre = zone ? zone.querySelector('.champ-nombre-tranches') : null;
+      const nombre = champNombre ? parseInt(champNombre.value, 10) : 2;
+      demanderGenerationTranches(btn.dataset.libelle, btn.dataset.eleve, nombre || 2);
+    });
+  });
   conteneur.querySelectorAll('.btn-ajouter-tranche').forEach(btn => {
     btn.addEventListener('click', () => {
       ajouterTranchePaiement(btn.dataset.libelle, btn.dataset.eleve);
@@ -6421,3 +6532,4 @@ window.addEventListener('appinstalled', () => {
 
 </body>
 </html>
+
