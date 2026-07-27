@@ -388,6 +388,7 @@ function creerEtatVide(){
     labor: [],
     labelPricing: {},
     studentPricing: {},
+    tarifReferenceParLibelle: {},
     simulator: {
       participants: 50,
       ticketPrice: 20
@@ -1368,6 +1369,7 @@ function fusionnerAvecEtatVide(donnees){
     labor: Array.isArray(donnees.labor) ? donnees.labor : [],
     labelPricing: (donnees.labelPricing && typeof donnees.labelPricing === 'object' && !Array.isArray(donnees.labelPricing)) ? donnees.labelPricing : {},
     studentPricing: (donnees.studentPricing && typeof donnees.studentPricing === 'object' && !Array.isArray(donnees.studentPricing)) ? donnees.studentPricing : {},
+    tarifReferenceParLibelle: (donnees.tarifReferenceParLibelle && typeof donnees.tarifReferenceParLibelle === 'object' && !Array.isArray(donnees.tarifReferenceParLibelle)) ? donnees.tarifReferenceParLibelle : {},
     simulator: Object.assign({}, base.simulator, donnees.simulator || {}),
     meta: Object.assign({}, base.meta, donnees.meta || {})
   };
@@ -4043,6 +4045,15 @@ function rendreRepartitionElevesSimulateur(m){
       </div>
     `;
 
+    const tarifReference = Number(state.tarifReferenceParLibelle[groupeLibelle.key]) || 0;
+    const tarifReferenceHtml = `
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:10px 14px; margin:0 0 10px 0; background:var(--primary-soft); border-radius:8px;">
+        <label style="font-size:12px; font-weight:600; color:var(--primary-dark); white-space:nowrap;">Tarif horaire de référence pour ce libellé</label>
+        <input type="number" class="input-field champ-tarif-reference-libelle" data-libelle-key="${echapperHtml(groupeLibelle.key)}" min="0" step="1" value="${tarifReference}" style="width:100px; padding:6px 10px; font-size:13px;">
+        <span style="font-size:11.5px; color:var(--primary-dark);">€/h — sert à suggérer un montant forfaitaire, selon les heures réelles de chaque élève. Toujours modifiable ensuite (réduction, etc.).</span>
+      </div>
+    `;
+
     const cartes = groupeLibelle.eleves.map(r => {
       const estViableEleve = r.resultatEleve >= 0;
       let seuilTexte;
@@ -4071,6 +4082,12 @@ function rendreRepartitionElevesSimulateur(m){
                   ? `Prix minimum pour couvrir les charges avec ${r.pricing.participants} participant(s) : <strong class="font-mono-num">${formaterMontant(r.chargesFixesEleve / r.pricing.participants)}</strong> <span style="color:var(--ink-soft);">(pour toute la saison)</span>`
                   : `Prix minimum pour 1 participant : <strong class="font-mono-num">${formaterMontant(r.chargesFixesEleve)}</strong> <span style="color:var(--ink-soft);">(renseigne le nombre de personnes pour un calcul précis)</span>`
                 }</p>
+                ${tarifReference > 0 ? `
+                  <p style="font-size:11px; color:var(--primary-dark); margin:6px 0 0 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                    Suggestion : ${r.heures} h × ${formaterMontant(tarifReference)}/h = <strong class="font-mono-num">${formaterMontant(r.heures * tarifReference)}</strong>
+                    <button type="button" class="btn-secondary btn-appliquer-suggestion-forfait" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-montant="${(r.heures * tarifReference).toFixed(2)}" style="padding:3px 10px; font-size:11px;">Appliquer</button>
+                  </p>
+                ` : ''}
               </div>
             ` : `
               <div>
@@ -4080,6 +4097,17 @@ function rendreRepartitionElevesSimulateur(m){
                   ? `Prix minimum par séance pour couvrir les charges (${r.nbSeances} séances, ${r.pricing.participants} participant(s)) : <strong class="font-mono-num">${formaterMontant(r.chargesFixesEleve / (r.pricing.participants * r.nbSeances))}</strong>`
                   : `Prix minimum par séance (1 participant, 1 séance) : <strong class="font-mono-num">${formaterMontant(r.chargesFixesEleve)}</strong> <span style="color:var(--ink-soft);">(renseigne le nombre de personnes pour un calcul précis)</span>`
                 }</p>
+                ${tarifReference > 0 && r.nbSeances > 0 ? (() => {
+                  const dureeMoyenneParSeance = r.heures / r.nbSeances;
+                  const minutesMoyennes = Math.round(dureeMoyenneParSeance * 60);
+                  const prixSuggere = dureeMoyenneParSeance * tarifReference;
+                  return `
+                    <p style="font-size:11px; color:var(--primary-dark); margin:6px 0 0 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                      Suggestion : ${minutesMoyennes} min/séance (moyenne) × ${formaterMontant(tarifReference)}/h = <strong class="font-mono-num">${formaterMontant(prixSuggere)}</strong>/séance
+                      <button type="button" class="btn-secondary btn-appliquer-suggestion-unite" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-montant="${prixSuggere.toFixed(2)}" style="padding:3px 10px; font-size:11px;">Appliquer</button>
+                    </p>
+                  `;
+                })() : ''}
               </div>
             `}
           </div>
@@ -4104,7 +4132,7 @@ function rendreRepartitionElevesSimulateur(m){
         <span style="font-weight:400; color:var(--ink-soft); font-size:12px;">(${groupeLibelle.eleves.length} élève${groupeLibelle.eleves.length > 1 ? 's' : ''})</span>
       </div>
       <div style="padding-left:6px; margin-bottom:10px;">${sousTotalHtml}</div>
-      ${estOuvert ? `<div style="padding-left:6px; margin-bottom:14px;">${cartes}</div>` : ''}
+      ${estOuvert ? `<div style="padding-left:6px; margin-bottom:14px;">${tarifReferenceHtml}${cartes}</div>` : ''}
     `;
   }).join('');
 
@@ -4168,6 +4196,38 @@ function attacherEcouteursPricingEleves(){
       mettreAJourPricingEleve(input.dataset.libelle, input.dataset.eleve, input.dataset.champ, input.value);
     });
   });
+  conteneur.querySelectorAll('.champ-tarif-reference-libelle').forEach(input => {
+    input.addEventListener('change', () => {
+      mettreAJourTarifReferenceLibelle(input.dataset.libelleKey, input.value);
+    });
+  });
+  conteneur.querySelectorAll('.btn-appliquer-suggestion-forfait').forEach(btn => {
+    btn.addEventListener('click', () => {
+      mettreAJourPricingEleve(btn.dataset.libelle, btn.dataset.eleve, 'forfaitAmount', btn.dataset.montant);
+      afficherToast('Suggestion appliquée — tu peux encore l\'ajuster si besoin (réduction, etc.).', 'succes');
+    });
+  });
+  conteneur.querySelectorAll('.btn-appliquer-suggestion-unite').forEach(btn => {
+    btn.addEventListener('click', () => {
+      mettreAJourPricingEleve(btn.dataset.libelle, btn.dataset.eleve, 'unitPrice', btn.dataset.montant);
+      afficherToast('Suggestion appliquée — tu peux encore l\'ajuster si besoin (réduction, etc.).', 'succes');
+    });
+  });
+}
+
+/* --- Met à jour le tarif horaire de référence d'un libellé, utilisé uniquement
+   pour SUGGÉRER un montant forfaitaire (jamais imposé, toujours modifiable). --- */
+function mettreAJourTarifReferenceLibelle(libelleKey, valeur){
+  const montant = parseFloat(valeur) || 0;
+  state.tarifReferenceParLibelle[libelleKey] = montant;
+  planifierSauvegarde();
+  const m = calculerMetriques();
+  const conteneur = document.getElementById('sim-repartition-eleves');
+  if(conteneur){
+    conteneur.innerHTML = rendreRepartitionElevesSimulateur(m);
+    attacherEcouteursPricingEleves();
+    attacherEcouteursGroupesEleves();
+  }
 }
 
 function ajusterSimulateur(){
