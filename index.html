@@ -3119,7 +3119,13 @@ function rendreBudget(){
       <td>
         <input type="text" class="input-field champ-eleve-inline" data-session-id="${s.id}" list="liste-eleves-existants" placeholder="Élève(s)..." value="${echapperHtml(obtenirElevesSession(s).join(', '))}" style="min-width:130px; font-size:13px; padding:6px 10px;">
       </td>
-      <td class="font-mono-num">${s.startTime && s.endTime ? `${s.startTime}–${s.endTime} <span style="color:var(--ink-soft);">(${Number(s.hours) || 0} h)</span>` : `${Number(s.hours) || 0} h`}</td>
+      <td class="font-mono-num" style="white-space:nowrap;">
+        <div style="display:flex; align-items:center; gap:5px;">
+          <input type="text" inputmode="decimal" class="input-field champ-duree-inline" data-session-id="${s.id}" value="${Math.round((Number(s.hours) || 0) * 60)}" style="width:58px; font-size:13px; padding:6px 8px; text-align:right;">
+          <span style="font-size:11px; color:var(--ink-soft);">min</span>
+        </div>
+        ${s.startTime && s.endTime ? `<div style="font-size:11px; color:var(--ink-soft); margin-top:3px;">${s.startTime}–${s.endTime}</div>` : ''}
+      </td>
       <td>
         <select class="input-field champ-paiement-inline" data-session-id="${s.id}" style="min-width:80px; font-size:13px; padding:6px 10px;">
           <option value="non" ${!s.paid ? 'selected' : ''}>Non</option>
@@ -3696,6 +3702,60 @@ function supprimerLibelleComplet(libelleKey){
 /* --- Propage un ou plusieurs élèves aux créneaux du même horaire, sur les dates
    SUIVANTES du même lot, sans jamais écraser un créneau déjà rempli. Renvoie le
    nombre de sessions mises à jour. --- */
+/* --- Modifie la durée d'un créneau, avec réajustement automatique en cascade :
+   - Sur la MÊME date : tous les créneaux suivants du même lot se décalent pour
+     démarrer juste après (sans trou ni chevauchement), en gardant chacun leur
+     propre durée.
+   - Si le créneau appartient à un LOT (batchId) : la même position (ex. "1er
+     créneau de la journée") est modifiée sur TOUTES les dates du lot, avec la
+     même cascade appliquée indépendamment à chacune.
+   - Si le créneau n'appartient à aucun lot : seule cette session est modifiée.
+   Ne touche jamais aux élèves déjà assignés (les objets de session sont
+   modifiés sur place, jamais recréés) — donc tous les calculs de rentabilité
+   restent exacts automatiquement, puisqu'ils se basent sur "hours" à jour. --- */
+function modifierDureeAvecCascade(session, nouvelleDuree){
+  if(!session.batchId){
+    // Session isolée, hors lot : modification simple, sans cascade.
+    session.hours = nouvelleDuree;
+    if(session.startTime) session.endTime = ajouterHeuresAHeure(session.startTime, nouvelleDuree);
+    return 1;
+  }
+
+  // Position du créneau modifié au sein de sa propre date (0 = premier de la journée)
+  const sessionsMemeDate = state.executionSessions
+    .filter(s => s.batchId === session.batchId && s.date === session.date)
+    .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+  const position = sessionsMemeDate.findIndex(s => s.id === session.id);
+  if(position === -1) return 0;
+
+  // Toutes les dates du lot, à réajuster de la même façon
+  const datesDuLot = [...new Set(
+    state.executionSessions.filter(s => s.batchId === session.batchId).map(s => s.date)
+  )];
+
+  let nbDatesAffectees = 0;
+  datesDuLot.forEach(date => {
+    const creneauxDate = state.executionSessions
+      .filter(s => s.batchId === session.batchId && s.date === date)
+      .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+    if(position >= creneauxDate.length) return; // cette date a moins de créneaux : on l'ignore par sécurité
+
+    creneauxDate[position].hours = nouvelleDuree; // applique la nouvelle durée à la même position, sur cette date
+
+    // Cascade : recalcule les horaires en chaîne à partir du tout premier créneau,
+    // chacun gardant SA PROPRE durée (seule celle de la position modifiée a changé).
+    let curseur = creneauxDate[0].startTime;
+    creneauxDate.forEach(c => {
+      c.startTime = curseur;
+      c.endTime = ajouterHeuresAHeure(curseur, Number(c.hours) || 0);
+      curseur = c.endTime;
+    });
+    nbDatesAffectees++;
+  });
+
+  return nbDatesAffectees;
+}
+
 function propagerElevesSurLot(session, nouveauxEleves){
   const idsAffectes = [];
   if(nouveauxEleves.length === 0 || !session.batchId) return idsAffectes;
@@ -3752,6 +3812,26 @@ function rafraichirChampsElevesAffiches(idsAffectes, nouveauxEleves){
 }
 
 function attacherEcouteursEleveInline(){
+  document.querySelectorAll('.champ-duree-inline').forEach(input => {
+    input.addEventListener('change', () => {
+      const session = trouverSession(input.dataset.sessionId);
+      if(!session) return;
+      const minutesSaisies = parseFloat(input.value);
+      if(isNaN(minutesSaisies) || minutesSaisies <= 0){
+        afficherToast('Indique une durée supérieure à 0.', 'erreur');
+        rendreBudget();
+        return;
+      }
+      const nouvelleDuree = minutesSaisies / 60; // stockage interne toujours en heures décimales
+      const nbDatesAffectees = modifierDureeAvecCascade(session, nouvelleDuree);
+      planifierSauvegarde();
+      if(nbDatesAffectees > 1){
+        afficherToast(`Durée appliquée sur les ${nbDatesAffectees} dates du lot, avec réajustement automatique des horaires suivants.`, 'succes');
+      }
+      enregistrerAction('a modifié la durée d\'un créneau (' + formaterDate(session.date) + ')');
+      rendreBudget();
+    });
+  });
   document.querySelectorAll('.champ-eleve-inline').forEach(input => {
     input.addEventListener('change', () => {
       const session = trouverSession(input.dataset.sessionId);
