@@ -1962,11 +1962,38 @@ function mettreAJourTranchePaiement(libelle, eleve, trancheId, champ, valeur){
   if(!pricing || !Array.isArray(pricing.echeancier)) return;
   const tranche = pricing.echeancier.find(t => t.id === trancheId);
   if(!tranche) return;
-  if(champ === 'recu') tranche.recu = !!valeur;
-  else if(champ === 'montant') tranche.montant = parseFloat(valeur) || 0;
-  else if(champ === 'dateEcheance') tranche.dateEcheance = valeur;
+  if(champ === 'recu'){
+    tranche.recu = !!valeur;
+  }else if(champ === 'dateEcheance'){
+    tranche.dateEcheance = valeur;
+  }else if(champ === 'montant'){
+    tranche.montant = parseFloat(valeur) || 0;
+    redistribuerAutresTranches(pricing, trancheId);
+  }
   planifierSauvegarde();
   rafraichirEcheancierAffiche(libelle, eleve);
+}
+
+/* --- Après la modification MANUELLE d'une tranche, répartit automatiquement le
+   solde restant (forfait − la tranche modifiée) sur TOUTES LES AUTRES tranches, en
+   parts égales (la dernière de la liste, hors celle modifiée, absorbe l'arrondi) —
+   pour ne jamais avoir à recalculer les autres tranches à la main. --- */
+function redistribuerAutresTranches(pricing, trancheIdModifiee){
+  const autresTranches = pricing.echeancier.filter(t => t.id !== trancheIdModifiee);
+  if(autresTranches.length === 0) return;
+  const trancheModifiee = pricing.echeancier.find(t => t.id === trancheIdModifiee);
+  const forfait = Number(pricing.forfaitAmount) || 0;
+  const soldeRestant = Math.max(0, forfait - (Number(trancheModifiee.montant) || 0));
+
+  let sommeDejaAffectee = 0;
+  autresTranches.forEach((t, i) => {
+    if(i === autresTranches.length - 1){
+      t.montant = Math.round((soldeRestant - sommeDejaAffectee) * 100) / 100;
+    }else{
+      t.montant = Math.round((soldeRestant / autresTranches.length) * 100) / 100;
+      sommeDejaAffectee += t.montant;
+    }
+  });
 }
 
 /* --- Ne re-rend QUE le bloc échéancier concerné (pas toute la section élèves),
@@ -1978,6 +2005,7 @@ function rafraichirEcheancierAffiche(libelle, eleve){
   const pricing = obtenirPricingEleve(libelle, eleve);
   conteneur.innerHTML = rendreEcheancierHtml(libelle, eleve, pricing);
   rafraichirIcones();
+  attacherEcouteursEcheancierDans(conteneur);
 }
 
 
@@ -4454,7 +4482,15 @@ function attacherEcouteursPricingEleves(){
       afficherToast('Suggestion appliquée — tu peux encore l\'ajuster si besoin (réduction, etc.).', 'succes');
     });
   });
-  conteneur.querySelectorAll('.btn-generer-tranches').forEach(btn => {
+  attacherEcouteursEcheancierDans(conteneur);
+}
+
+/* --- Écouteurs de l'échéancier de paiement — factorisés pour pouvoir être
+   ré-attachés soit sur toute la section élèves (affichage complet), soit sur
+   un seul bloc échéancier (rafraîchissement partiel après une modification),
+   sans jamais dupliquer les écouteurs des AUTRES élèves. --- */
+function attacherEcouteursEcheancierDans(racine){
+  racine.querySelectorAll('.btn-generer-tranches').forEach(btn => {
     btn.addEventListener('click', () => {
       const zone = btn.closest('.zone-echeancier');
       const champNombre = zone ? zone.querySelector('.champ-nombre-tranches') : null;
@@ -4462,27 +4498,27 @@ function attacherEcouteursPricingEleves(){
       demanderGenerationTranches(btn.dataset.libelle, btn.dataset.eleve, nombre || 2);
     });
   });
-  conteneur.querySelectorAll('.btn-ajouter-tranche').forEach(btn => {
+  racine.querySelectorAll('.btn-ajouter-tranche').forEach(btn => {
     btn.addEventListener('click', () => {
       ajouterTranchePaiement(btn.dataset.libelle, btn.dataset.eleve);
     });
   });
-  conteneur.querySelectorAll('.btn-supprimer-tranche').forEach(btn => {
+  racine.querySelectorAll('.btn-supprimer-tranche').forEach(btn => {
     btn.addEventListener('click', () => {
       supprimerTranchePaiement(btn.dataset.libelle, btn.dataset.eleve, btn.dataset.trancheId);
     });
   });
-  conteneur.querySelectorAll('.champ-tranche-montant').forEach(input => {
+  racine.querySelectorAll('.champ-tranche-montant').forEach(input => {
     input.addEventListener('change', () => {
       mettreAJourTranchePaiement(input.dataset.libelle, input.dataset.eleve, input.dataset.trancheId, 'montant', input.value);
     });
   });
-  conteneur.querySelectorAll('.champ-tranche-date').forEach(input => {
+  racine.querySelectorAll('.champ-tranche-date').forEach(input => {
     input.addEventListener('change', () => {
       mettreAJourTranchePaiement(input.dataset.libelle, input.dataset.eleve, input.dataset.trancheId, 'dateEcheance', input.value);
     });
   });
-  conteneur.querySelectorAll('.champ-tranche-recu').forEach(input => {
+  racine.querySelectorAll('.champ-tranche-recu').forEach(input => {
     input.addEventListener('change', () => {
       mettreAJourTranchePaiement(input.dataset.libelle, input.dataset.eleve, input.dataset.trancheId, 'recu', input.checked);
     });
@@ -6532,4 +6568,3 @@ window.addEventListener('appinstalled', () => {
 
 </body>
 </html>
-
