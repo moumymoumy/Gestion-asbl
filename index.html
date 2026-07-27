@@ -1844,6 +1844,17 @@ function mettreAJourPricingEleve(libelle, eleve, champ, valeur){
    Remplace TOUTES les tranches existantes — une confirmation est demandée
    avant, si des tranches existent déjà. Tout reste ensuite modifiable
    manuellement (montant, date, ajout/suppression d'une tranche). --- */
+/* --- Arrondit un montant à une valeur "pratique" pour un paiement réel (espèces,
+   virement) : au 10€ le plus proche pour les gros montants, au 5€ ou au 1€ pour
+   les plus petits — pour ne jamais tomber sur des montants à centimes (ex.
+   126,67€) ni sur 0€ pour des petites tranches. --- */
+function arrondirMontantPratique(montant){
+  if(montant >= 50) return Math.round(montant / 10) * 10;
+  if(montant >= 10) return Math.round(montant / 5) * 5;
+  if(montant >= 1) return Math.round(montant);
+  return Math.round(montant * 2) / 2; // arrondi au 0,50€ le plus proche pour les tout petits montants
+}
+
 function genererTranchesAutomatiques(libelle, eleve, nombreTranches){
   const n = Math.max(1, Math.round(nombreTranches) || 1);
   const pricing = obtenirPricingEleve(libelle, eleve);
@@ -1869,7 +1880,7 @@ function genererTranchesAutomatiques(libelle, eleve, nombreTranches){
     if(i === n - 1){
       montant = Math.round((total - sommeDejaAffectee) * 100) / 100; // absorbe l'arrondi
     }else{
-      montant = Math.round((total / n) * 100) / 100;
+      montant = arrondirMontantPratique(total / n);
       sommeDejaAffectee += montant;
     }
 
@@ -1990,7 +2001,7 @@ function redistribuerAutresTranches(pricing, trancheIdModifiee){
     if(i === autresTranches.length - 1){
       t.montant = Math.round((soldeRestant - sommeDejaAffectee) * 100) / 100;
     }else{
-      t.montant = Math.round((soldeRestant / autresTranches.length) * 100) / 100;
+      t.montant = arrondirMontantPratique(soldeRestant / autresTranches.length);
       sommeDejaAffectee += t.montant;
     }
   });
