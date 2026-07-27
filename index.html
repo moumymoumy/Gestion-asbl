@@ -1803,7 +1803,8 @@ function obtenirPricingEleve(libelle, eleve){
     mode: config && config.mode === 'forfait' ? 'forfait' : 'unite',
     unitPrice: config ? Number(config.unitPrice) || 0 : 0,
     participants: config ? Number(config.participants) || 0 : 1,
-    forfaitAmount: config ? Number(config.forfaitAmount) || 0 : 0
+    forfaitAmount: config ? Number(config.forfaitAmount) || 0 : 0,
+    echeancier: (config && Array.isArray(config.echeancier)) ? config.echeancier : []
   };
 }
 
@@ -1819,7 +1820,7 @@ function calculerRecettePropreEleve(libelle, eleve, nbSeances){
 
 function mettreAJourPricingEleve(libelle, eleve, champ, valeur){
   if(!state.studentPricing[libelle]) state.studentPricing[libelle] = {};
-  if(!state.studentPricing[libelle][eleve]) state.studentPricing[libelle][eleve] = { mode: 'unite', unitPrice: 0, participants: 1, forfaitAmount: 0 };
+  if(!state.studentPricing[libelle][eleve]) state.studentPricing[libelle][eleve] = { mode: 'unite', unitPrice: 0, participants: 1, forfaitAmount: 0, echeancier: [] };
   if(champ === 'mode'){
     state.studentPricing[libelle][eleve].mode = valeur === 'forfait' ? 'forfait' : 'unite';
   }else{
@@ -1835,6 +1836,100 @@ function mettreAJourPricingEleve(libelle, eleve, champ, valeur){
   }
 }
 
+/* --- Échéancier de paiement (mode Forfait uniquement) : ajoute une tranche, en
+   pré-remplissant son montant avec le solde restant (forfait - somme des tranches
+   déjà présentes) pour tomber juste par défaut, tout en restant modifiable. --- */
+function ajouterTranchePaiement(libelle, eleve){
+  const pricing = obtenirPricingEleve(libelle, eleve);
+  const sommeActuelle = pricing.echeancier.reduce((s, t) => s + (Number(t.montant) || 0), 0);
+  const solde = Math.max(0, pricing.forfaitAmount - sommeActuelle);
+  if(!state.studentPricing[libelle]) state.studentPricing[libelle] = {};
+  if(!state.studentPricing[libelle][eleve]) state.studentPricing[libelle][eleve] = { mode: 'forfait', unitPrice: 0, participants: 1, forfaitAmount: 0, echeancier: [] };
+  if(!Array.isArray(state.studentPricing[libelle][eleve].echeancier)) state.studentPricing[libelle][eleve].echeancier = [];
+  state.studentPricing[libelle][eleve].echeancier.push({ id: genererId(), montant: solde, dateEcheance: '', recu: false });
+  planifierSauvegarde();
+  rafraichirEcheancierAffiche(libelle, eleve);
+}
+
+function supprimerTranchePaiement(libelle, eleve, trancheId){
+  const pricing = state.studentPricing[libelle] && state.studentPricing[libelle][eleve];
+  if(!pricing || !Array.isArray(pricing.echeancier)) return;
+  pricing.echeancier = pricing.echeancier.filter(t => t.id !== trancheId);
+  planifierSauvegarde();
+  rafraichirEcheancierAffiche(libelle, eleve);
+}
+
+function mettreAJourTranchePaiement(libelle, eleve, trancheId, champ, valeur){
+  const pricing = state.studentPricing[libelle] && state.studentPricing[libelle][eleve];
+  if(!pricing || !Array.isArray(pricing.echeancier)) return;
+  const tranche = pricing.echeancier.find(t => t.id === trancheId);
+  if(!tranche) return;
+  if(champ === 'recu') tranche.recu = !!valeur;
+  else if(champ === 'montant') tranche.montant = parseFloat(valeur) || 0;
+  else if(champ === 'dateEcheance') tranche.dateEcheance = valeur;
+  planifierSauvegarde();
+  rafraichirEcheancierAffiche(libelle, eleve);
+}
+
+/* --- Ne re-rend QUE le bloc échéancier concerné (pas toute la section élèves),
+   pour ne pas perdre le focus si on enchaîne plusieurs champs. --- */
+function rafraichirEcheancierAffiche(libelle, eleve){
+  const cle = normaliserLibelle(libelle) + '||' + normaliserLibelle(eleve);
+  const conteneur = document.querySelector(`.zone-echeancier[data-cle-echeancier="${cle}"]`);
+  if(!conteneur) return;
+  const pricing = obtenirPricingEleve(libelle, eleve);
+  conteneur.innerHTML = rendreEcheancierHtml(libelle, eleve, pricing);
+  rafraichirIcones();
+}
+
+
+/* --- Rendu de l'échéancier de paiement d'un élève (mode Forfait uniquement).
+   Vérifie visuellement (vert/rouge) que la somme des tranches correspond
+   exactement au montant du forfait, sans jamais bloquer la saisie. --- */
+function rendreEcheancierHtml(libelle, eleve, pricing){
+  const somme = pricing.echeancier.reduce((s, t) => s + (Number(t.montant) || 0), 0);
+  const ecart = pricing.forfaitAmount - somme;
+  const equilibre = Math.abs(ecart) < 0.005;
+
+  const lignesHtml = pricing.echeancier.map((t, i) => `
+    <div style="display:grid; grid-template-columns:24px 1fr 130px 34px 34px; align-items:center; gap:6px; padding:5px 0;">
+      <span style="font-size:11px; color:var(--ink-soft); text-align:center;">#${i + 1}</span>
+      <input type="number" class="input-field champ-tranche-montant" data-libelle="${echapperHtml(libelle)}" data-eleve="${echapperHtml(eleve)}" data-tranche-id="${t.id}" min="0" step="1" value="${t.montant}" style="padding:5px 8px; font-size:12.5px;">
+      <input type="date" class="input-field champ-tranche-date" data-libelle="${echapperHtml(libelle)}" data-eleve="${echapperHtml(eleve)}" data-tranche-id="${t.id}" value="${t.dateEcheance || ''}" style="padding:5px 6px; font-size:12px;">
+      <label style="display:flex; align-items:center; justify-content:center; cursor:pointer;" title="Reçu">
+        <input type="checkbox" class="champ-tranche-recu" data-libelle="${echapperHtml(libelle)}" data-eleve="${echapperHtml(eleve)}" data-tranche-id="${t.id}" ${t.recu ? 'checked' : ''} style="width:16px; height:16px;">
+      </label>
+      <button class="btn-danger-ghost btn-supprimer-tranche" data-libelle="${echapperHtml(libelle)}" data-eleve="${echapperHtml(eleve)}" data-tranche-id="${t.id}" style="padding:4px;" title="Supprimer cette tranche">
+        <i data-lucide="trash-2" style="width:14px;height:14px;"></i>
+      </button>
+    </div>
+  `).join('');
+
+  return `
+    <div style="margin-top:12px; padding-top:12px; border-top:1px dashed var(--border);">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+        <span style="font-size:12px; font-weight:600;">Échéancier de paiement</span>
+        <button type="button" class="btn-secondary btn-ajouter-tranche" data-libelle="${echapperHtml(libelle)}" data-eleve="${echapperHtml(eleve)}" style="padding:4px 10px; font-size:11.5px;">
+          <i data-lucide="plus" style="width:12px;height:12px;"></i> Tranche
+        </button>
+      </div>
+      ${pricing.echeancier.length === 0 ? `
+        <p style="font-size:11.5px; color:var(--ink-soft); margin:0;">Paiement en une fois (aucune tranche ajoutée).</p>
+      ` : `
+        <div style="display:grid; grid-template-columns:24px 1fr 130px 34px 34px; gap:6px; font-size:10.5px; color:var(--ink-soft); padding-bottom:4px; border-bottom:1px solid var(--border);">
+          <span></span><span>Montant (€)</span><span>Date prévue</span><span style="text-align:center;">Reçu</span><span></span>
+        </div>
+        ${lignesHtml}
+        <div style="margin-top:8px; padding:7px 10px; border-radius:6px; font-size:11px; font-weight:600; background:${equilibre ? 'var(--success-soft)' : 'var(--danger-soft)'}; color:${equilibre ? 'var(--success)' : 'var(--danger)'};">
+          ${equilibre
+            ? `✓ Somme des tranches (${formaterMontant(somme)}) = forfait (${formaterMontant(pricing.forfaitAmount)})`
+            : `⚠ Somme des tranches (${formaterMontant(somme)}) ≠ forfait (${formaterMontant(pricing.forfaitAmount)}) — ${ecart > 0 ? `il manque ${formaterMontant(ecart)}` : `dépasse de ${formaterMontant(-ecart)}`}`
+          }
+        </div>
+      `}
+    </div>
+  `;
+}
 
 function libelleModeDepense(mode){
   return {
@@ -4144,6 +4239,11 @@ function rendreRepartitionElevesSimulateur(m){
               </div>
             `}
           </div>
+          ${r.pricing.mode === 'forfait' ? `
+            <div class="zone-echeancier" data-cle-echeancier="${normaliserLibelle(groupeLibelle.label)}||${normaliserLibelle(r.label)}">
+              ${rendreEcheancierHtml(groupeLibelle.label, r.label, r.pricing)}
+            </div>
+          ` : ''}
           <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px,1fr)); gap:12px; font-size:12.5px; padding-top:12px; border-top:1px solid var(--border);">
             <div><div style="color:var(--ink-soft); margin-bottom:3px;">Dépenses</div><div class="font-mono-num" style="font-weight:700;">${formaterMontant(r.totalDepensesReellesEleve)}</div></div>
             <div>
@@ -4249,6 +4349,31 @@ function attacherEcouteursPricingEleves(){
     btn.addEventListener('click', () => {
       mettreAJourPricingEleve(btn.dataset.libelle, btn.dataset.eleve, 'unitPrice', btn.dataset.montant);
       afficherToast('Suggestion appliquée — tu peux encore l\'ajuster si besoin (réduction, etc.).', 'succes');
+    });
+  });
+  conteneur.querySelectorAll('.btn-ajouter-tranche').forEach(btn => {
+    btn.addEventListener('click', () => {
+      ajouterTranchePaiement(btn.dataset.libelle, btn.dataset.eleve);
+    });
+  });
+  conteneur.querySelectorAll('.btn-supprimer-tranche').forEach(btn => {
+    btn.addEventListener('click', () => {
+      supprimerTranchePaiement(btn.dataset.libelle, btn.dataset.eleve, btn.dataset.trancheId);
+    });
+  });
+  conteneur.querySelectorAll('.champ-tranche-montant').forEach(input => {
+    input.addEventListener('change', () => {
+      mettreAJourTranchePaiement(input.dataset.libelle, input.dataset.eleve, input.dataset.trancheId, 'montant', input.value);
+    });
+  });
+  conteneur.querySelectorAll('.champ-tranche-date').forEach(input => {
+    input.addEventListener('change', () => {
+      mettreAJourTranchePaiement(input.dataset.libelle, input.dataset.eleve, input.dataset.trancheId, 'dateEcheance', input.value);
+    });
+  });
+  conteneur.querySelectorAll('.champ-tranche-recu').forEach(input => {
+    input.addEventListener('change', () => {
+      mettreAJourTranchePaiement(input.dataset.libelle, input.dataset.eleve, input.dataset.trancheId, 'recu', input.checked);
     });
   });
 }
