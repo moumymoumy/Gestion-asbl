@@ -4057,9 +4057,9 @@ function rendreRepartitionElevesSimulateur(m){
           <span style="font-size:11.5px; color:var(--primary-dark);">€/h — la suggestion varie selon la durée de chaque séance.</span>
         </div>
         <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-          <label style="font-size:12px; font-weight:600; color:var(--primary-dark); white-space:nowrap; width:230px;">Tarif fixe de référence (par séance)</label>
+          <label style="font-size:12px; font-weight:600; color:var(--primary-dark); white-space:nowrap; width:230px;">Forfait de référence (si séances d'1h)</label>
           <input type="number" class="input-field champ-tarif-seance-reference-libelle" data-libelle-key="${echapperHtml(groupeLibelle.key)}" min="0" step="1" value="${tarifSeanceReference}" style="width:100px; padding:6px 10px; font-size:13px;">
-          <span style="font-size:11.5px; color:var(--primary-dark);">€/séance — même prix quelle que soit la durée (30 min ou 1h30).</span>
+          <span style="font-size:11.5px; color:var(--primary-dark);">€ — ce que coûterait la saison de CET élève si toutes ses séances faisaient 1h ; le résultat s'ajuste ensuite à sa vraie durée.</span>
         </div>
         <p style="font-size:11px; color:var(--primary-dark); opacity:0.8; margin:0;">Ces deux tarifs ne font que suggérer un montant — jamais imposé, toujours modifiable ensuite (réduction, etc.). Remplis l'un, l'autre, ou les deux.</p>
       </div>
@@ -4099,12 +4099,16 @@ function rendreRepartitionElevesSimulateur(m){
                     <button type="button" class="btn-secondary btn-appliquer-suggestion-forfait" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-montant="${(r.heures * tarifReference).toFixed(2)}" style="padding:3px 10px; font-size:11px;">Appliquer</button>
                   </p>
                 ` : ''}
-                ${tarifSeanceReference > 0 ? `
-                  <p style="font-size:11px; color:var(--primary-dark); margin:6px 0 0 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                    Suggestion (fixe) : ${r.nbSeances} séances × ${formaterMontant(tarifSeanceReference)}/séance = <strong class="font-mono-num">${formaterMontant(r.nbSeances * tarifSeanceReference)}</strong>
-                    <button type="button" class="btn-secondary btn-appliquer-suggestion-forfait" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-montant="${(r.nbSeances * tarifSeanceReference).toFixed(2)}" style="padding:3px 10px; font-size:11px;">Appliquer</button>
-                  </p>
-                ` : ''}
+                ${tarifSeanceReference > 0 && r.nbSeances > 0 ? (() => {
+                  const tarifHoraireImplicite = tarifSeanceReference / r.nbSeances;
+                  const forfaitSuggere2 = tarifHoraireImplicite * r.heures;
+                  return `
+                    <p style="font-size:11px; color:var(--primary-dark); margin:6px 0 0 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                      Suggestion (base 1h) : ${formaterMontant(tarifSeanceReference)} ÷ ${r.nbSeances} séances × ${r.heures} h réelles = <strong class="font-mono-num">${formaterMontant(forfaitSuggere2)}</strong>
+                      <button type="button" class="btn-secondary btn-appliquer-suggestion-forfait" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-montant="${forfaitSuggere2.toFixed(2)}" style="padding:3px 10px; font-size:11px;">Appliquer</button>
+                    </p>
+                  `;
+                })() : ''}
               </div>
             ` : `
               <div>
@@ -4125,12 +4129,18 @@ function rendreRepartitionElevesSimulateur(m){
                     </p>
                   `;
                 })() : ''}
-                ${tarifSeanceReference > 0 ? `
-                  <p style="font-size:11px; color:var(--primary-dark); margin:6px 0 0 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                    Suggestion (fixe) : <strong class="font-mono-num">${formaterMontant(tarifSeanceReference)}</strong>/séance, quelle que soit la durée
-                    <button type="button" class="btn-secondary btn-appliquer-suggestion-unite" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-montant="${tarifSeanceReference.toFixed(2)}" style="padding:3px 10px; font-size:11px;">Appliquer</button>
-                  </p>
-                ` : ''}
+                ${tarifSeanceReference > 0 && r.nbSeances > 0 ? (() => {
+                  const tarifHoraireImplicite = tarifSeanceReference / r.nbSeances;
+                  const dureeMoyenneParSeance = r.heures / r.nbSeances;
+                  const minutesMoyennes = Math.round(dureeMoyenneParSeance * 60);
+                  const uniteSuggere2 = tarifHoraireImplicite * dureeMoyenneParSeance;
+                  return `
+                    <p style="font-size:11px; color:var(--primary-dark); margin:6px 0 0 0; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                      Suggestion (base 1h) : ${formaterMontant(tarifSeanceReference)} ÷ ${r.nbSeances} séances, ajusté à ${minutesMoyennes} min/séance = <strong class="font-mono-num">${formaterMontant(uniteSuggere2)}</strong>/séance
+                      <button type="button" class="btn-secondary btn-appliquer-suggestion-unite" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-montant="${uniteSuggere2.toFixed(2)}" style="padding:3px 10px; font-size:11px;">Appliquer</button>
+                    </p>
+                  `;
+                })() : ''}
               </div>
             `}
           </div>
