@@ -3954,6 +3954,66 @@ function supprimerLibelleComplet(libelleKey){
    Ne touche jamais aux élèves déjà assignés (les objets de session sont
    modifiés sur place, jamais recréés) — donc tous les calculs de rentabilité
    restent exacts automatiquement, puisqu'ils se basent sur "hours" à jour. --- */
+/* --- Identifie, pour un créneau donné, l'ID de TOUS les créneaux à la même
+   position sur toutes les dates de son lot (ou juste lui-même hors lot).
+   Sert à la fois à vérifier la main d'œuvre AVANT suppression, et à la cascade
+   de suppression elle-même — une seule logique, jamais deux versions à tenir
+   à jour séparément. --- */
+function identifierCreneauxMemePosition(session){
+  if(!session.batchId) return [session.id];
+
+  const sessionsMemeDate = state.executionSessions
+    .filter(s => s.batchId === session.batchId && s.date === session.date)
+    .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+  const position = sessionsMemeDate.findIndex(s => s.id === session.id);
+  if(position === -1) return [session.id];
+
+  const datesDuLot = [...new Set(
+    state.executionSessions.filter(s => s.batchId === session.batchId).map(s => s.date)
+  )];
+
+  const ids = [];
+  datesDuLot.forEach(date => {
+    const creneauxDate = state.executionSessions
+      .filter(s => s.batchId === session.batchId && s.date === date)
+      .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+    if(position < creneauxDate.length) ids.push(creneauxDate[position].id);
+  });
+  return ids;
+}
+
+/* --- Supprime un créneau : la place se libère simplement, SANS jamais déplacer
+   les autres créneaux (chaque personne garde son propre horaire fixe pour toute
+   la période). Si le créneau appartient à un LOT (batchId), la même position
+   est supprimée sur TOUTES LES DATES du lot (le nom disparaît partout) — mais
+   toujours sans aucun décalage des autres. Retourne le nombre de dates
+   affectées. --- */
+function supprimerCreneauAvecCascade(session){
+  if(!session.batchId){
+    state.executionSessions = state.executionSessions.filter(s => s.id !== session.id);
+    return 1;
+  }
+
+  const idsASupprimer = new Set(identifierCreneauxMemePosition(session));
+  const datesDuLot = [...new Set(
+    state.executionSessions.filter(s => s.batchId === session.batchId).map(s => s.date)
+  )];
+
+  let nbDatesAffectees = 0;
+  datesDuLot.forEach(date => {
+    const creneauxDateAvant = state.executionSessions.filter(s => s.batchId === session.batchId && s.date === date);
+    const aUnCreneauASupprimer = creneauxDateAvant.some(s => idsASupprimer.has(s.id));
+    if(!aUnCreneauASupprimer) return;
+
+    state.executionSessions = state.executionSessions.filter(s =>
+      !(idsASupprimer.has(s.id) && s.date === date && s.batchId === session.batchId)
+    );
+    nbDatesAffectees++;
+  });
+
+  return nbDatesAffectees;
+}
+
 function modifierDureeAvecCascade(session, nouvelleDuree){
   if(!session.batchId){
     // Session isolée, hors lot : modification simple, sans cascade.
@@ -4747,16 +4807,25 @@ function enregistrerSession(){
 }
 
 function supprimerSession(id){
-  const utilisee = state.labor.some(e => e.sessionId === id);
+  const session = trouverSession(id);
+  if(!session) return;
+
+  const idsConcernes = identifierCreneauxMemePosition(session);
+  const utilisee = state.labor.some(e => idsConcernes.includes(e.sessionId));
   if(utilisee){
-    afficherToast('Cette session est utilisée dans la main d\'œuvre. Supprime d\'abord ces entrées.', 'erreur');
+    afficherToast('Un des créneaux concernés (sur une autre date du lot) est utilisé dans la main d\'œuvre. Supprime d\'abord ces entrées.', 'erreur');
     return;
   }
-  state.executionSessions = state.executionSessions.filter(s => s.id !== id);
+
+  const nbDatesAffectees = supprimerCreneauAvecCascade(session);
   enregistrerAction('a supprimé une session d\'exécution');
   rendreBudget();
   rendreAccueil();
-  afficherToast('Session supprimée.', 'info');
+  if(nbDatesAffectees > 1){
+    afficherToast(`Créneau libéré sur les ${nbDatesAffectees} dates du lot. Les autres créneaux ne sont pas affectés.`, 'info');
+  }else{
+    afficherToast('Session supprimée.', 'info');
+  }
 }
 
 /* --- Ajoute une durée (en heures) à une heure "HH:MM" et renvoie la nouvelle heure --- */
