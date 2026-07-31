@@ -4105,59 +4105,28 @@ function modifierDureeAvecCascade(session, nouvelleDuree){
   return nbDatesAffectees;
 }
 
-function propagerElevesSurLot(session, nouveauxEleves){
-  const idsAffectes = [];
-  if(nouveauxEleves.length === 0 || !session.batchId) return idsAffectes;
-  state.executionSessions.forEach(autre => {
-    if(autre.id === session.id) return;
-    if(autre.batchId !== session.batchId) return;
-    if(autre.startTime !== session.startTime) return;
-    if(!(autre.date > session.date)) return; // uniquement les dates suivantes
-    if(obtenirElevesSession(autre).length > 0) return; // jamais écraser un créneau déjà rempli
-    autre.students = nouveauxEleves.slice();
-    delete autre.student;
-    idsAffectes.push(autre.id);
-  });
-  return idsAffectes;
-}
+/* --- Modifie les élèves d'un créneau, avec la MÊME logique de cascade que la
+   durée et la suppression : si le créneau appartient à un LOT, le changement
+   s'applique à la MÊME POSITION sur TOUTES les dates du lot — qu'un nom y soit
+   déjà présent ou non, il est remplacé. Retourne le nombre de dates affectées
+   (en comptant la date modifiée elle-même). --- */
+function modifierElevesAvecCascade(session, nouveauxEleves){
+  if(!session.batchId){
+    session.students = nouveauxEleves.slice();
+    delete session.student;
+    return 1;
+  }
 
-/* --- Compare deux listes d'élèves indépendamment de l'ordre et des petites variations
-   d'orthographe (mêmes règles que le regroupement des libellés/élèves). --- */
-function memesListesEleves(a, b){
-  const na = a.map(n => normaliserLibelle(n)).sort();
-  const nb = b.map(n => normaliserLibelle(n)).sort();
-  return JSON.stringify(na) === JSON.stringify(nb);
-}
-
-/* --- Propage l'EFFACEMENT d'un créneau vers les dates suivantes du même lot, mais
-   UNIQUEMENT si elles contiennent encore exactement le(s) même(s) nom(s) qu'on vient
-   d'effacer (option B) : si une date ultérieure a été changée entre-temps pour
-   quelqu'un d'autre, elle n'est jamais touchée par cet effacement. --- */
-function propagerEffacementElevesSurLot(session, ancienneListe){
-  const idsAffectes = [];
-  if(ancienneListe.length === 0 || !session.batchId) return idsAffectes;
-  state.executionSessions.forEach(autre => {
-    if(autre.id === session.id) return;
-    if(autre.batchId !== session.batchId) return;
-    if(autre.startTime !== session.startTime) return;
-    if(!(autre.date > session.date)) return; // uniquement les dates suivantes
-    const elevesActuels = obtenirElevesSession(autre);
-    if(!memesListesEleves(elevesActuels, ancienneListe)) return; // a été changée entre-temps : on n'y touche pas
-    autre.students = [];
-    delete autre.student;
-    idsAffectes.push(autre.id);
+  const idsMemePosition = identifierCreneauxMemePosition(session);
+  let nbDatesAffectees = 0;
+  idsMemePosition.forEach(id => {
+    const s = trouverSession(id);
+    if(!s) return;
+    s.students = nouveauxEleves.slice();
+    delete s.student;
+    nbDatesAffectees++;
   });
-  return idsAffectes;
-}
-
-/* --- Met à jour à l'écran (sans tout re-rendre) les champs Élève déjà visibles qui
-   viennent d'être remplis par la propagation automatique, sinon ils resteraient vides
-   à l'affichage tant que le tableau n'est pas rafraîchi en entier. --- */
-function rafraichirChampsElevesAffiches(idsAffectes, nouveauxEleves){
-  idsAffectes.forEach(id => {
-    const input = document.querySelector(`.champ-eleve-inline[data-session-id="${id}"]`);
-    if(input) input.value = nouveauxEleves.join(', ');
-  });
+  return nbDatesAffectees;
 }
 
 function attacherEcouteursEleveInline(){
@@ -4185,37 +4154,14 @@ function attacherEcouteursEleveInline(){
     input.addEventListener('change', () => {
       const session = trouverSession(input.dataset.sessionId);
       if(!session) return;
-      const ancienneListe = obtenirElevesSession(session);
       const nouveauxEleves = input.value.split(',').map(n => n.trim()).filter(Boolean);
-      session.students = nouveauxEleves;
-      delete session.student;
-
-      let idsAffectes;
-      if(nouveauxEleves.length > 0){
-        idsAffectes = propagerElevesSurLot(session, nouveauxEleves);
-        rafraichirChampsElevesAffiches(idsAffectes, nouveauxEleves);
-      }else{
-        idsAffectes = propagerEffacementElevesSurLot(session, ancienneListe);
-        rafraichirChampsElevesAffiches(idsAffectes, []);
-      }
-
+      const nbDatesAffectees = modifierElevesAvecCascade(session, nouveauxEleves);
       planifierSauvegarde();
-      // Rafraîchir seulement les totaux/rentabilité par élève, sans reconstruire tout
-      // le tableau (on perdrait le focus si l'utilisateur enchaîne les champs).
-      const m = calculerMetriques();
-      const conteneurEleves = document.getElementById('sim-repartition-eleves');
-      if(conteneurEleves){
-        conteneurEleves.innerHTML = rendreRepartitionElevesSimulateur(m);
-        attacherEcouteursPricingEleves();
-        attacherEcouteursGroupesEleves();
+      if(nbDatesAffectees > 1){
+        afficherToast(`Élève(s) appliqué(s) sur les ${nbDatesAffectees} dates du lot.`, 'succes');
       }
-      if(idsAffectes.length > 0){
-        const message = nouveauxEleves.length > 0
-          ? `Élève(s) aussi appliqué(s) sur ${idsAffectes.length} date(s) suivante(s) au même horaire.`
-          : `Élève(s) aussi retiré(s) sur ${idsAffectes.length} date(s) suivante(s) qui avaient encore le même nom.`;
-        afficherToast(message, 'succes');
-      }
-      enregistrerAction('a renseigné un élève sur une session (' + formaterDate(session.date) + ')');
+      enregistrerAction('a modifié l\'élève d\'un créneau (' + formaterDate(session.date) + ')');
+      rendreBudget();
     });
   });
   document.querySelectorAll('.champ-paiement-inline').forEach(select => {
@@ -4827,19 +4773,12 @@ function enregistrerSession(){
 
   if(editingSessionId){
     const session = trouverSession(editingSessionId);
-    let idsAffectes = [];
-    let messageComplement = '';
+    let nbDatesAffectees = 0;
     if(session){
-      const ancienneListe = obtenirElevesSession(session);
-      session.date = date; session.label = label; session.students = students; delete session.student; session.paid = paid; session.hours = heures; session.startTime = startTime; session.endTime = endTime;
-      if(students.length > 0){
-        idsAffectes = propagerElevesSurLot(session, students);
-        if(idsAffectes.length > 0) messageComplement = ` Élève(s) aussi appliqué(s) sur ${idsAffectes.length} date(s) suivante(s) au même horaire.`;
-      }else{
-        idsAffectes = propagerEffacementElevesSurLot(session, ancienneListe);
-        if(idsAffectes.length > 0) messageComplement = ` Élève(s) aussi retiré(s) sur ${idsAffectes.length} date(s) suivante(s) qui avaient encore le même nom.`;
-      }
+      session.date = date; session.label = label; session.paid = paid; session.hours = heures; session.startTime = startTime; session.endTime = endTime;
+      nbDatesAffectees = modifierElevesAvecCascade(session, students);
     }
+    const messageComplement = nbDatesAffectees > 1 ? ` Élève(s) aussi appliqué(s) sur les ${nbDatesAffectees} dates du lot.` : '';
     afficherToast('Session modifiée.' + messageComplement, 'succes');
     editingSessionId = null;
     enregistrerAction('a modifié une session d\'exécution (' + date + ')');
@@ -4927,27 +4866,58 @@ function enregistrerDuplicationSession(){
   if(nombre <= 0){ afficherToast('Indique au moins 1 créneau à créer.', 'erreur'); return; }
 
   const aUnePlage = !!(session.startTime && session.endTime);
-  let curseurDebut = session.startTime;
   const duree = Number(session.hours) || 0;
 
-  for(let i = 0; i < nombre; i++){
-    if(aUnePlage){
-      const nouveauDebut = ajouterHeuresAHeure(curseurDebut, duree);
-      const nouvelleFin = ajouterHeuresAHeure(nouveauDebut, duree);
-      state.executionSessions.push({
-        id: genererId(), date: session.date, label: session.label, students: [],
-        hours: duree, startTime: nouveauDebut, endTime: nouvelleFin
-      });
-      curseurDebut = nouveauDebut;
-    }else{
-      state.executionSessions.push({
-        id: genererId(), date: session.date, label: session.label, students: [],
-        hours: duree, startTime: null, endTime: null
-      });
-    }
+  /* --- Si ce créneau appartient à un lot, on duplique sur TOUTES les dates du
+     lot (pas juste celle-ci) : on retrouve, sur chaque date, le créneau à la
+     MÊME POSITION que celui qu'on duplique, et on enchaîne les nouveaux
+     créneaux juste après lui. --- */
+  const datesACompleter = [];
+  if(session.batchId){
+    const sessionsMemeDate = state.executionSessions
+      .filter(s => s.batchId === session.batchId && s.date === session.date)
+      .sort((a,b) => (a.startTime || '').localeCompare(b.startTime || ''));
+    const position = sessionsMemeDate.findIndex(s => s.id === session.id);
+    const dates = [...new Set(state.executionSessions.filter(s => s.batchId === session.batchId).map(s => s.date))];
+    dates.forEach(date => {
+      const sessionsDate = state.executionSessions
+        .filter(s => s.batchId === session.batchId && s.date === date)
+        .sort((a,b) => (a.startTime || '').localeCompare(b.startTime || ''));
+      const ancre = (position >= 0 && position < sessionsDate.length) ? sessionsDate[position] : sessionsDate[sessionsDate.length - 1];
+      if(ancre) datesACompleter.push({ date, ancre });
+    });
+  }else{
+    datesACompleter.push({ date: session.date, ancre: session });
   }
+
+  datesACompleter.forEach(({ date, ancre }) => {
+    let curseurDebut = ancre.startTime;
+    for(let i = 0; i < nombre; i++){
+      if(aUnePlage){
+        const nouveauDebut = ajouterHeuresAHeure(curseurDebut, duree);
+        const nouvelleFin = ajouterHeuresAHeure(nouveauDebut, duree);
+        state.executionSessions.push({
+          id: genererId(), date, label: session.label, students: [], batchId: session.batchId || null,
+          hours: duree, startTime: nouveauDebut, endTime: nouvelleFin
+        });
+        curseurDebut = nouveauDebut;
+      }else{
+        state.executionSessions.push({
+          id: genererId(), date, label: session.label, students: [], batchId: session.batchId || null,
+          hours: duree, startTime: null, endTime: null
+        });
+      }
+    }
+  });
+
+  const nbDatesAffectees = datesACompleter.length;
   enregistrerAction(`a dupliqué une session en ${nombre} créneau(x) supplémentaire(s) (` + formaterDate(session.date) + ')');
-  afficherToast(nombre + ' créneau(x) créé(s). Renseigne l\'élève de chacun dans le tableau.', 'succes');
+  afficherToast(
+    nbDatesAffectees > 1
+      ? `${nombre} créneau(x) créé(s) sur les ${nbDatesAffectees} dates du lot. Renseigne l'élève de chacun dans le tableau.`
+      : nombre + ' créneau(x) créé(s). Renseigne l\'élève de chacun dans le tableau.',
+    'succes'
+  );
   sessionADupliquerId = null;
   fermerModal();
   rendreBudget();
