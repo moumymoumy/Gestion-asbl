@@ -649,6 +649,15 @@ async function synchroniserListeProjetsDepuisCompte(){
    connecté, sans code à retaper — même principe que pour les projets. --- */
 async function synchroniserChargesDepuisCompte(){
   try{
+    // Si CET appareil est déjà lié à un calculateur (peu importe lequel), on ne
+    // touche à rien : reprendreLiaisonChargesSyncSiExistant() s'en occupe déjà.
+    // Sans cette garde, les deux mécanismes tournant en parallèle au démarrage
+    // pouvaient pointer vers deux enregistrements différents et s'écraser l'un
+    // l'autre selon celui qui terminait en dernier.
+    let liaisonExistante = null;
+    try{ liaisonExistante = JSON.parse(localStorage.getItem(CHARGES_SYNC_STORAGE_KEY) || 'null'); }catch(e){}
+    if(liaisonExistante && liaisonExistante.id && liaisonExistante.editCode) return;
+
     const { data: liste, error } = await supabaseClient.rpc('lister_mes_charges_securise');
     if(error) throw error;
     if(!liste || liste.length === 0) return; // aucun calculateur encore synchronisé pour ce compte
@@ -3431,7 +3440,11 @@ function rendreBudget(){
     groupesSessions[cle].sessions.push(s);
   });
   const groupesSessionsListe = Object.values(groupesSessions).sort((a,b) => a.label.localeCompare(b.label));
-  groupesSessionsListe.forEach(g => g.sessions.sort((a,b) => (a.date || '').localeCompare(b.date || '')));
+  groupesSessionsListe.forEach(g => g.sessions.sort((a,b) => {
+    const parDate = (a.date || '').localeCompare(b.date || '');
+    if(parDate !== 0) return parDate;
+    return (a.startTime || '').localeCompare(b.startTime || '');
+  }));
 
   /* --- Détecte les lots de créneaux générés ensemble (batchId partagé) dans un groupe --- */
   function obtenirLotsDansGroupe(sessions){
