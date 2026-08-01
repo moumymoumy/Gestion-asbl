@@ -4868,53 +4868,70 @@ function enregistrerDuplicationSession(){
   const aUnePlage = !!(session.startTime && session.endTime);
   const duree = Number(session.hours) || 0;
 
-  /* --- Si ce créneau appartient à un lot, on duplique sur TOUTES les dates du
-     lot (pas juste celle-ci) : on retrouve, sur chaque date, le créneau à la
-     MÊME POSITION que celui qu'on duplique, et on enchaîne les nouveaux
-     créneaux juste après lui. --- */
-  const datesACompleter = [];
-  if(session.batchId){
-    const sessionsMemeDate = state.executionSessions
-      .filter(s => s.batchId === session.batchId && s.date === session.date)
-      .sort((a,b) => (a.startTime || '').localeCompare(b.startTime || ''));
-    const position = sessionsMemeDate.findIndex(s => s.id === session.id);
-    const dates = [...new Set(state.executionSessions.filter(s => s.batchId === session.batchId).map(s => s.date))];
-    dates.forEach(date => {
-      const sessionsDate = state.executionSessions
-        .filter(s => s.batchId === session.batchId && s.date === date)
-        .sort((a,b) => (a.startTime || '').localeCompare(b.startTime || ''));
-      const ancre = (position >= 0 && position < sessionsDate.length) ? sessionsDate[position] : sessionsDate[sessionsDate.length - 1];
-      if(ancre) datesACompleter.push({ date, ancre });
-    });
-  }else{
-    datesACompleter.push({ date: session.date, ancre: session });
-  }
-
-  datesACompleter.forEach(({ date, ancre }) => {
-    let curseurDebut = ancre.startTime;
+  if(!session.batchId){
+    // Session isolée, hors lot : comportement simple, ajoute juste après elle.
+    let curseur = session.startTime;
     for(let i = 0; i < nombre; i++){
       if(aUnePlage){
-        const nouveauDebut = ajouterHeuresAHeure(curseurDebut, duree);
-        const nouvelleFin = ajouterHeuresAHeure(nouveauDebut, duree);
-        state.executionSessions.push({
-          id: genererId(), date, label: session.label, students: [], batchId: session.batchId || null,
-          hours: duree, startTime: nouveauDebut, endTime: nouvelleFin
-        });
-        curseurDebut = nouveauDebut;
+        const debut = ajouterHeuresAHeure(curseur, duree);
+        const fin = ajouterHeuresAHeure(debut, duree);
+        state.executionSessions.push({ id: genererId(), date: session.date, label: session.label, students: [], batchId: null, hours: duree, startTime: debut, endTime: fin });
+        curseur = debut;
       }else{
-        state.executionSessions.push({
-          id: genererId(), date, label: session.label, students: [], batchId: session.batchId || null,
-          hours: duree, startTime: null, endTime: null
-        });
+        state.executionSessions.push({ id: genererId(), date: session.date, label: session.label, students: [], batchId: null, hours: duree, startTime: null, endTime: null });
       }
     }
+    afficherToast(nombre + ' créneau(x) créé(s). Renseigne l\'élève de chacun dans le tableau.', 'succes');
+    sessionADupliquerId = null;
+    fermerModal();
+    rendreBudget();
+    rendreAccueil();
+    return;
+  }
+
+  /* --- Dans un lot : insère les nouveaux créneaux JUSTE APRÈS la position
+     dupliquée, sur TOUTES les dates du lot, en décalant les créneaux suivants
+     (même cascade que la modification de durée) — pour ne JAMAIS créer de
+     chevauchement d'horaire, contrairement à un simple ajout en fin de liste. --- */
+  const sessionsMemeDatePosition = state.executionSessions
+    .filter(s => s.batchId === session.batchId && s.date === session.date)
+    .sort((a,b) => (a.startTime || '').localeCompare(b.startTime || ''));
+  const position = sessionsMemeDatePosition.findIndex(s => s.id === session.id);
+
+  const dates = [...new Set(state.executionSessions.filter(s => s.batchId === session.batchId).map(s => s.date))];
+  let nbDatesAffectees = 0;
+
+  dates.forEach(date => {
+    const sessionsDate = state.executionSessions
+      .filter(s => s.batchId === session.batchId && s.date === date)
+      .sort((a,b) => (a.startTime || '').localeCompare(b.startTime || ''));
+    if(position === -1 || position >= sessionsDate.length) return;
+
+    const nouvelles = [];
+    for(let i = 0; i < nombre; i++){
+      nouvelles.push({ id: genererId(), date, label: session.label, students: [], batchId: session.batchId, hours: duree, startTime: null, endTime: null });
+    }
+
+    // Insère les nouveaux créneaux juste après la position dupliquée, puis
+    // recalcule la cascade complète (chacun garde sa propre durée).
+    const nouvelleListe = sessionsDate.slice(0, position + 1).concat(nouvelles, sessionsDate.slice(position + 1));
+    if(aUnePlage){
+      let curseur = nouvelleListe[0].startTime;
+      nouvelleListe.forEach(s => {
+        s.startTime = curseur;
+        s.endTime = ajouterHeuresAHeure(curseur, Number(s.hours) || 0);
+        curseur = s.endTime;
+      });
+    }
+
+    nouvelles.forEach(s => state.executionSessions.push(s));
+    nbDatesAffectees++;
   });
 
-  const nbDatesAffectees = datesACompleter.length;
   enregistrerAction(`a dupliqué une session en ${nombre} créneau(x) supplémentaire(s) (` + formaterDate(session.date) + ')');
   afficherToast(
     nbDatesAffectees > 1
-      ? `${nombre} créneau(x) créé(s) sur les ${nbDatesAffectees} dates du lot. Renseigne l'élève de chacun dans le tableau.`
+      ? `${nombre} créneau(x) inséré(s) sur les ${nbDatesAffectees} dates du lot, avec réajustement automatique des horaires suivants.`
       : nombre + ' créneau(x) créé(s). Renseigne l\'élève de chacun dans le tableau.',
     'succes'
   );
