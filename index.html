@@ -419,6 +419,7 @@ let libellesSessionsReplies = new Set();
 // (contrairement aux libellés), donc on retient plutôt ceux qui sont OUVERTS.
 // Clé = libelleKey + '||' + date
 let datesSessionsOuvertes = new Set();
+let elevesCartesOuvertes = new Set(); // vide = tout replié par défaut
 // Idem pour les dossiers de libellé dans la section Rentabilité par élève.
 let libellesElevesReplies = new Set();
 let editingLaborId = null;
@@ -4362,15 +4363,30 @@ function rendreRepartitionElevesSimulateur(m){
       if(r.seuilEleveStatut === 'non_atteignable') seuilTexte = 'Non atteignable';
       else seuilTexte = r.seuilEleve + (r.seuilEleveUnite === 'participant' ? ' participant(s)' : ' séance(s)');
 
+      const cleCarteEleve = normaliserLibelle(groupeLibelle.label) + '||' + normaliserLibelle(r.label);
+      const carteOuverte = elevesCartesOuvertes.has(cleCarteEleve);
+      const montantAffiche = r.pricing.mode === 'forfait'
+        ? `${formaterMontant(r.pricing.forfaitAmount)} (forfait)`
+        : `${formaterMontant(r.pricing.unitPrice)} / séance`;
+
       return `
         <div class="card" style="padding:16px; margin-bottom:12px;">
-          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
-            <div style="font-weight:700; font-size:13.5px;">${echapperHtml(r.label)} <span style="font-weight:400; color:var(--ink-soft); font-size:12px;">(${r.heures} h sur ${r.nbSeances} séance${r.nbSeances > 1 ? 's' : ''})</span></div>
-            <div style="display:flex; gap:6px;">
-              <button type="button" class="btn-secondary btn-pricing-mode-eleve" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-mode="unite" style="padding:6px 12px; font-size:12px; ${r.pricing.mode === 'unite' ? 'background:var(--primary-soft); color:var(--primary-dark); border-color:var(--primary-soft);' : ''}">À l'unité</button>
-              <button type="button" class="btn-secondary btn-pricing-mode-eleve" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-mode="forfait" style="padding:6px 12px; font-size:12px; ${r.pricing.mode === 'forfait' ? 'background:var(--primary-soft); color:var(--primary-dark); border-color:var(--primary-soft);' : ''}">Forfait</button>
+          <div class="ligne-carte-eleve" data-carte-eleve-key="${echapperHtml(cleCarteEleve)}" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; ${carteOuverte ? 'margin-bottom:12px;' : ''}">
+            <div style="display:flex; align-items:center; gap:8px;">
+              <i data-lucide="${carteOuverte ? 'chevron-down' : 'chevron-right'}" style="width:14px;height:14px; color:var(--ink-soft);"></i>
+              <span style="font-weight:700; font-size:13.5px;">${echapperHtml(r.label)}</span>
+              <span style="font-weight:400; color:var(--ink-soft); font-size:12px;">
+                ${carteOuverte ? `(${r.heures} h sur ${r.nbSeances} séance${r.nbSeances > 1 ? 's' : ''})` : `— ${montantAffiche}`}
+              </span>
             </div>
+            ${carteOuverte ? `
+              <div style="display:flex; gap:6px;" onclick="event.stopPropagation();">
+                <button type="button" class="btn-secondary btn-pricing-mode-eleve" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-mode="unite" style="padding:6px 12px; font-size:12px; ${r.pricing.mode === 'unite' ? 'background:var(--primary-soft); color:var(--primary-dark); border-color:var(--primary-soft);' : ''}">À l'unité</button>
+                <button type="button" class="btn-secondary btn-pricing-mode-eleve" data-libelle="${echapperHtml(groupeLibelle.label)}" data-eleve="${echapperHtml(r.label)}" data-mode="forfait" style="padding:6px 12px; font-size:12px; ${r.pricing.mode === 'forfait' ? 'background:var(--primary-soft); color:var(--primary-dark); border-color:var(--primary-soft);' : ''}">Forfait</button>
+              </div>
+            ` : ''}
           </div>
+          ${carteOuverte ? `
           <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(140px,1fr)); gap:10px; margin-bottom:14px;">
             <div>
               <label class="field-label">Nombre de personnes (ce cours)</label>
@@ -4450,6 +4466,7 @@ function rendreRepartitionElevesSimulateur(m){
             <div><div style="color:var(--ink-soft); margin-bottom:3px;">Résultat</div><div class="font-mono-num" style="font-weight:700; color:${estViableEleve ? 'var(--success)' : 'var(--danger)'};">${estViableEleve ? '+' : ''}${formaterMontant(r.resultatEleve)}</div></div>
             <div><div style="color:var(--ink-soft); margin-bottom:3px;">Seuil de rentabilité</div><div class="font-mono-num" style="font-weight:700;">${seuilTexte}</div></div>
           </div>
+          ` : ''}
         </div>
       `;
     }).join('');
@@ -4485,7 +4502,13 @@ function rendreRepartitionElevesSimulateur(m){
 
   return `
     <div style="margin-top:22px; padding-top:20px; border-top:1px solid var(--border);">
-      <h4 class="font-display" style="font-size:14px; font-weight:700; margin:0 0 4px 0;">Rentabilité par élève</h4>
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:4px;">
+        <h4 class="font-display" style="font-size:14px; font-weight:700; margin:0;">Rentabilité par élève</h4>
+        <div style="display:flex; gap:8px;">
+          <button type="button" class="btn-secondary btn-toggle-toutes-cartes-eleves" data-action="deplier" style="padding:5px 12px; font-size:11.5px;">Tout déplier</button>
+          <button type="button" class="btn-secondary btn-toggle-toutes-cartes-eleves" data-action="replier" style="padding:5px 12px; font-size:11.5px;">Tout replier</button>
+        </div>
+      </div>
       <p style="font-size:11.5px; color:var(--ink-soft); margin:0 0 14px 0;">Regroupée par libellé (dossiers repliables) : un même élève sur deux libellés différents a deux rentabilités bien séparées, chacune avec sa propre tarification (à l'unité ou au forfait).</p>
       ${resumeGeneralHtml}
       ${blocsLibelle}
@@ -4500,6 +4523,43 @@ function attacherEcouteursGroupesEleves(){
       const cle = ligne.dataset.groupeEleveLibelleKey;
       if(libellesElevesReplies.has(cle)) libellesElevesReplies.delete(cle);
       else libellesElevesReplies.add(cle);
+      const m = calculerMetriques();
+      const conteneur = document.getElementById('sim-repartition-eleves');
+      if(conteneur){
+        conteneur.innerHTML = rendreRepartitionElevesSimulateur(m);
+        rafraichirIcones();
+        attacherEcouteursPricingEleves();
+        attacherEcouteursGroupesEleves();
+      }
+    });
+  });
+
+  /* --- Replie/déplie une carte élève individuelle --- */
+  document.querySelectorAll('.ligne-carte-eleve').forEach(ligne => {
+    ligne.addEventListener('click', () => {
+      const cle = ligne.dataset.carteEleveKey;
+      if(elevesCartesOuvertes.has(cle)) elevesCartesOuvertes.delete(cle);
+      else elevesCartesOuvertes.add(cle);
+      const m = calculerMetriques();
+      const conteneur = document.getElementById('sim-repartition-eleves');
+      if(conteneur){
+        conteneur.innerHTML = rendreRepartitionElevesSimulateur(m);
+        rafraichirIcones();
+        attacherEcouteursPricingEleves();
+        attacherEcouteursGroupesEleves();
+      }
+    });
+  });
+
+  /* --- Tout déplier / Tout replier d'un coup (uniquement les cartes actuellement
+     visibles, c'est-à-dire dans un libellé déjà déplié). --- */
+  document.querySelectorAll('.btn-toggle-toutes-cartes-eleves').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if(btn.dataset.action === 'deplier'){
+        document.querySelectorAll('.ligne-carte-eleve').forEach(ligne => elevesCartesOuvertes.add(ligne.dataset.carteEleveKey));
+      }else{
+        elevesCartesOuvertes.clear();
+      }
       const m = calculerMetriques();
       const conteneur = document.getElementById('sim-repartition-eleves');
       if(conteneur){
